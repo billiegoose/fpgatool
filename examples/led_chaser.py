@@ -32,7 +32,7 @@ def led_chaser():
     # always gives a full interval before the next step.
     if board.BTNC:
         counter = 0
-    elif counter == (step_cycles - 1):
+    elif counter >= (step_cycles - 1):
         counter = 0
         if direction_right:
             if position == 15:
