@@ -1,0 +1,16 @@
+name = "Digilent Basys 3"
+
+[fpga]
+family = "artix7"
+part = "xc7a35tcpg236-1"
+chipdb = "xc7a35tcpg236.bin"
+
+[backend]
+type = "pipelinec-openxc7"
+constraints = "include/pypeline/board/basys3/pins.xdc"
+
+[programmer]
+type = "openfpgaloader"
+board = "basys3"
+load_mode = "sram"
+program_mode = "flash"

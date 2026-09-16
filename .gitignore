@@ -1,0 +1,5 @@
+.pgc/
+.fpgatool/
+build/
+__pycache__/
+*.pyc

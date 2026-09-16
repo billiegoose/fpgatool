@@ -1,0 +1,10 @@
+[pipelinec]
+repo = "https://github.com/billiegoose/PipelineC.git"
+rev = "e9c7c6af3cc6b6bbad097af82a4c14d7b885b466"
+
+[openxc7]
+repo = "https://github.com/openXC7/toolchain-nix.git"
+rev = "860ee576fbf8f29cc893561624d1e1aa044bc2e8"
+
+[container]
+nix_image = "docker.io/nixos/nix@sha256:7a007c766426c1877758ddc5cb87a965ac131fc78c582ce0083d922d51ae945c"
