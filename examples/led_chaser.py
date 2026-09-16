@@ -13,18 +13,20 @@ def led_chaser():
     position: Reg[uint4_t] = 0
     direction_right: Reg[uint1_t] = 1
 
-    # Direction buttons latch the direction. If both are held, right wins.
+    # The PCB numbers LD0..LD15 from right to left, so the physical direction
+    # buttons map oppositely to increasing/decreasing LED numbers.
+    # If both are held, BTNR wins.
     if board.BTNL:
-        direction_right = 0
-    if board.BTNR:
         direction_right = 1
+    if board.BTNR:
+        direction_right = 0
 
-    # Default: 100 ms/step. Up is 25 ms/step; down is 400 ms/step.
+    # Default: 100 ms/step. Up is temporarily 2x faster; down is 2x slower.
     step_cycles: uint32_t = 10_000_000
     if board.BTNU:
-        step_cycles = 2_500_000
+        step_cycles = 5_000_000
     if board.BTND:
-        step_cycles = 40_000_000
+        step_cycles = 20_000_000
 
     # Center pauses while held. Reset the divider while paused so releasing it
     # always gives a full interval before the next step.
