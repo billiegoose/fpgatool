@@ -1,6 +1,6 @@
 # pyright: reportInvalidTypeForm=none
 # pyright: reportUndefinedVariable=none
-"""Chase one lit LED across LD0..LD15; each matching SW switch inverts it."""
+"""Exercise Basys 3 LEDs, switches, and pushbuttons with an interactive chaser."""
 
 from pypeline import *
 import board.basys3.part35t
@@ -9,17 +9,43 @@ import board.basys3.io as board
 
 @MAIN(100.0)
 def led_chaser():
-    # Advance every 100 ms from the 100 MHz board clock.
     counter: Reg[uint32_t] = 0
     position: Reg[uint4_t] = 0
+    direction_right: Reg[uint1_t] = 1
 
-    if counter == (10_000_000 - 1):
+    # Direction buttons latch the direction. If both are held, right wins.
+    if board.BTNL:
+        direction_right = 0
+    if board.BTNR:
+        direction_right = 1
+
+    # Default: 100 ms/step. Up is 25 ms/step; down is 400 ms/step.
+    step_cycles: uint32_t = 10_000_000
+    if board.BTNU:
+        step_cycles = 2_500_000
+    if board.BTND:
+        step_cycles = 40_000_000
+
+    # Center pauses while held. Reset the divider while paused so releasing it
+    # always gives a full interval before the next step.
+    if board.BTNC:
         counter = 0
-        position = position + 1
+    elif counter == (step_cycles - 1):
+        counter = 0
+        if direction_right:
+            if position == 15:
+                position = 0
+            else:
+                position = position + 1
+        else:
+            if position == 0:
+                position = 15
+            else:
+                position = position - 1
     else:
         counter = counter + 1
 
-    # Each switch XORs its matching LED, so the switch locally inverts the chaser.
+    # Each slide switch XORs its matching LED, locally inverting the chaser.
     board.LD0 = (position == 0) ^ board.SW0
     board.LD1 = (position == 1) ^ board.SW1
     board.LD2 = (position == 2) ^ board.SW2
