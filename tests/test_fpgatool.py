@@ -39,7 +39,7 @@ class FPGAToolTests(unittest.TestCase):
         with mock.patch.object(fpgatool, "output") as output_mock:
             output_mock.side_effect = [
                 "https://github.com/billiegoose/PipelineC.git",
-                "0ee16afd122e5cbcacaa9367229f87daedf246c3",
+                "dce15d203edfc69c4f97ce86f7a8ef0ece58e046",
                 "",
             ]
             with mock.patch.object(Path, "exists", return_value=True):
@@ -47,7 +47,7 @@ class FPGAToolTests(unittest.TestCase):
                     fpgatool.checkout_matches_pipelinec_pin(
                         Path("/tmp/PipelineC"),
                         "https://github.com/billiegoose/PipelineC.git",
-                        "0ee16afd122e5cbcacaa9367229f87daedf246c3",
+                        "dce15d203edfc69c4f97ce86f7a8ef0ece58e046",
                     )
                 )
 
@@ -78,14 +78,14 @@ class FPGAToolTests(unittest.TestCase):
         ) as output_mock:
             output_mock.side_effect = [
                 "https://github.com/billiegoose/PipelineC.git",
-                "0ee16afd122e5cbcacaa9367229f87daedf246c3",
+                "dce15d203edfc69c4f97ce86f7a8ef0ece58e046",
                 "",
             ]
             self.assertTrue(
                 fpgatool.checkout_matches_pipelinec_pin(
                     Path("/tmp/PipelineC-worktree"),
                     "https://github.com/billiegoose/PipelineC.git",
-                    "0ee16afd122e5cbcacaa9367229f87daedf246c3",
+                    "dce15d203edfc69c4f97ce86f7a8ef0ece58e046",
                 )
             )
 
@@ -131,6 +131,17 @@ class FPGAToolTests(unittest.TestCase):
         self.assertFalse(quiet.verbose)
         self.assertTrue(verbose.verbose)
 
+    def test_comb_is_opt_in(self):
+        normal = fpgatool.parser().parse_args(["build", "examples/blink.py"])
+        comb = fpgatool.parser().parse_args(["run", "examples/vga_smpte.py", "--comb"])
+        self.assertFalse(normal.comb)
+        self.assertTrue(comb.comb)
+
+    def test_build_wrapper_forwards_comb_only_when_requested(self):
+        script = (ROOT / "toolchain" / "build-pipelinec.sh").read_text()
+        self.assertIn('if [ "$comb_arg" = "--comb" ]; then', script)
+        self.assertIn('pipelinec_args+=(--comb)', script)
+
     def test_quiet_run_redirects_tool_output_to_log(self):
         log = ROOT / ".fpgatool-test.log"
         try:
@@ -143,6 +154,13 @@ class FPGAToolTests(unittest.TestCase):
             self.assertIs(kwargs["stderr"], subprocess.STDOUT)
         finally:
             log.unlink(missing_ok=True)
+
+    def test_pipelinec_delay_cache_is_writable_build_output(self):
+        script = (ROOT / "toolchain" / "build-pipelinec.sh").read_text()
+        self.assertIn(
+            'export PYPELINEC_PATH_DELAY_CACHE_DIR="$out_dir/path_delay_cache"',
+            script,
+        )
 
     def test_default_bitstream_is_stable(self):
         source = (fpgatool.ROOT / "examples" / "blink.py").resolve()

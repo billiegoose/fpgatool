@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 5 ]; then
-  echo "usage: build-pipelinec.sh PIPELINEC_DIR SOURCE OUT_DIR CONSTRAINTS CHIPDB_NAME" >&2
+if [ "$#" -lt 5 ] || [ "$#" -gt 6 ]; then
+  echo "usage: build-pipelinec.sh PIPELINEC_DIR SOURCE OUT_DIR CONSTRAINTS CHIPDB_NAME [--comb]" >&2
   exit 2
 fi
 
@@ -11,6 +11,11 @@ source_file="$2"
 out_dir="$3"
 constraints_rel="$4"
 chipdb_name="$5"
+comb_arg="${6:-}"
+if [ -n "$comb_arg" ] && [ "$comb_arg" != "--comb" ]; then
+  echo "unknown build-pipelinec.sh option: $comb_arg" >&2
+  exit 2
+fi
 
 : "${FPGA_TOOL_PIPELINEC_PYTHON:?missing pinned PipelineC Python from Nix shell}"
 : "${FPGA_TOOL_CHIPDB_DIR:?missing generated chipdb from Nix shell}"
@@ -27,14 +32,25 @@ rm -rf "$out_dir/pipelinec"
 mkdir -p "$out_dir/pipelinec"
 
 export OPENXC7_CHIPDB="$chipdb"
+# PipelineC caches measured primitive delays. Keep that cache in the writable
+# per-design build tree because the pinned compiler checkout is mounted read-only.
+export PYPELINEC_PATH_DELAY_CACHE_DIR="$out_dir/path_delay_cache"
 
 # The source lives outside PipelineC, so make its reusable Pypeline library and
 # board modules importable without making host PYTHONPATH part of the contract.
 export PYTHONPATH="$pipelinec_dir/include/pypeline${PYTHONPATH:+:$PYTHONPATH}"
 
-"$FPGA_TOOL_PIPELINEC_PYTHON" "$pipelinec_dir/src/pipelinec" \
-  "$source_file" \
-  --syn_tool openxc7 \
-  --no_sweep \
-  --pins "$constraints" \
+pipelinec_args=(
+  "$source_file"
+  --syn_tool openxc7
+  --no_sweep
+)
+if [ "$comb_arg" = "--comb" ]; then
+  pipelinec_args+=(--comb)
+fi
+pipelinec_args+=(
+  --pins "$constraints"
   --out_dir "$out_dir/pipelinec"
+)
+
+"$FPGA_TOOL_PIPELINEC_PYTHON" "$pipelinec_dir/src/pipelinec" "${pipelinec_args[@]}"

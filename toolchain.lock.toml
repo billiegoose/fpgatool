@@ -1,6 +1,6 @@
 [pipelinec]
 repo = "https://github.com/billiegoose/PipelineC.git"
-rev = "0ee16afd122e5cbcacaa9367229f87daedf246c3"
+rev = "dce15d203edfc69c4f97ce86f7a8ef0ece58e046"
 
 [openxc7]
 repo = "https://github.com/openXC7/toolchain-nix.git"

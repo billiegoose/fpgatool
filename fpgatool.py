@@ -257,6 +257,8 @@ def cmd_build(args: argparse.Namespace) -> Path:
         pc_constraints,
         board["fpga"]["chipdb"],
     ]
+    if getattr(args, "comb", False):
+        container_cmd.append("--comb")
     build_log = out_dir / "build.log"
     print(f"Building {source.relative_to(ROOT)} for {board['name']}...")
     try:
@@ -389,6 +391,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("command", nargs="?", choices=("build", "load", "run", "program", "doctor", "shell"))
     p.add_argument("source", nargs="?", help="design source for build/run, or an existing .bit file for load/program")
     p.add_argument("--board", default=DEFAULT_BOARD, help=f"board profile (default: {DEFAULT_BOARD})")
+    p.add_argument("--comb", action="store_true", help="disable PipelineC auto-pipelining and build the design as written")
     p.add_argument("-v", "--verbose", action="store_true", help="stream full toolchain output")
     return p
 
