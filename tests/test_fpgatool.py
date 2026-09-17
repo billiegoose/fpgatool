@@ -39,7 +39,7 @@ class FPGAToolTests(unittest.TestCase):
         with mock.patch.object(fpgatool, "output") as output_mock:
             output_mock.side_effect = [
                 "https://github.com/billiegoose/PipelineC.git",
-                "dce15d203edfc69c4f97ce86f7a8ef0ece58e046",
+                "af34f25f76d11bbf7973b8e4b531611fe499cf0e",
                 "",
             ]
             with mock.patch.object(Path, "exists", return_value=True):
@@ -47,7 +47,7 @@ class FPGAToolTests(unittest.TestCase):
                     fpgatool.checkout_matches_pipelinec_pin(
                         Path("/tmp/PipelineC"),
                         "https://github.com/billiegoose/PipelineC.git",
-                        "dce15d203edfc69c4f97ce86f7a8ef0ece58e046",
+                        "af34f25f76d11bbf7973b8e4b531611fe499cf0e",
                     )
                 )
 
@@ -78,14 +78,14 @@ class FPGAToolTests(unittest.TestCase):
         ) as output_mock:
             output_mock.side_effect = [
                 "https://github.com/billiegoose/PipelineC.git",
-                "dce15d203edfc69c4f97ce86f7a8ef0ece58e046",
+                "af34f25f76d11bbf7973b8e4b531611fe499cf0e",
                 "",
             ]
             self.assertTrue(
                 fpgatool.checkout_matches_pipelinec_pin(
                     Path("/tmp/PipelineC-worktree"),
                     "https://github.com/billiegoose/PipelineC.git",
-                    "dce15d203edfc69c4f97ce86f7a8ef0ece58e046",
+                    "af34f25f76d11bbf7973b8e4b531611fe499cf0e",
                 )
             )
 
