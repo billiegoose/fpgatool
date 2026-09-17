@@ -11,6 +11,7 @@ import board.basys3.io as board
 def led_chaser():
     counter: Reg[uint32_t] = 0
     position: Reg[uint4_t] = 0
+    segment_position: Reg[uint32_t] = 0
     direction_right: Reg[uint1_t] = 1
 
     # Scan the four seven-segment digits at 1 kHz per complete display frame.
@@ -39,7 +40,9 @@ def led_chaser():
     if board.BTND:
         step_cycles = 20_000_000
 
-    # Center pauses while held.
+    # Center pauses while held. The LED and seven-segment chasers advance on
+    # the same tick; 16 LED positions versus 32 segment positions means the
+    # segment path takes exactly twice as long to make a complete cycle.
     if board.BTNC:
         counter = 0
     elif counter >= (step_cycles - 1):
@@ -49,53 +52,83 @@ def led_chaser():
                 position = 0
             else:
                 position = position + 1
+            if segment_position == 31:
+                segment_position = 0
+            else:
+                segment_position = segment_position + 1
         else:
             if position == 0:
                 position = 15
             else:
                 position = position - 1
+            if segment_position == 0:
+                segment_position = 31
+            else:
+                segment_position = segment_position - 1
     else:
         counter = counter + 1
 
-    # Sixteen logical chaser signals. Each switch locally inverts its matching
-    # signal; the same signal drives LDn and one pair of seven-segment LEDs.
-    s0: uint1_t = (position == 0) ^ board.SW0
-    s1: uint1_t = (position == 1) ^ board.SW1
-    s2: uint1_t = (position == 2) ^ board.SW2
-    s3: uint1_t = (position == 3) ^ board.SW3
-    s4: uint1_t = (position == 4) ^ board.SW4
-    s5: uint1_t = (position == 5) ^ board.SW5
-    s6: uint1_t = (position == 6) ^ board.SW6
-    s7: uint1_t = (position == 7) ^ board.SW7
-    s8: uint1_t = (position == 8) ^ board.SW8
-    s9: uint1_t = (position == 9) ^ board.SW9
-    s10: uint1_t = (position == 10) ^ board.SW10
-    s11: uint1_t = (position == 11) ^ board.SW11
-    s12: uint1_t = (position == 12) ^ board.SW12
-    s13: uint1_t = (position == 13) ^ board.SW13
-    s14: uint1_t = (position == 14) ^ board.SW14
-    s15: uint1_t = (position == 15) ^ board.SW15
+    # LED chaser: each slide switch XORs its matching LED.
+    board.LD0 = (position == 0) ^ board.SW0
+    board.LD1 = (position == 1) ^ board.SW1
+    board.LD2 = (position == 2) ^ board.SW2
+    board.LD3 = (position == 3) ^ board.SW3
+    board.LD4 = (position == 4) ^ board.SW4
+    board.LD5 = (position == 5) ^ board.SW5
+    board.LD6 = (position == 6) ^ board.SW6
+    board.LD7 = (position == 7) ^ board.SW7
+    board.LD8 = (position == 8) ^ board.SW8
+    board.LD9 = (position == 9) ^ board.SW9
+    board.LD10 = (position == 10) ^ board.SW10
+    board.LD11 = (position == 11) ^ board.SW11
+    board.LD12 = (position == 12) ^ board.SW12
+    board.LD13 = (position == 13) ^ board.SW13
+    board.LD14 = (position == 14) ^ board.SW14
+    board.LD15 = (position == 15) ^ board.SW15
 
-    board.LD0 = s0
-    board.LD1 = s1
-    board.LD2 = s2
-    board.LD3 = s3
-    board.LD4 = s4
-    board.LD5 = s5
-    board.LD6 = s6
-    board.LD7 = s7
-    board.LD8 = s8
-    board.LD9 = s9
-    board.LD10 = s10
-    board.LD11 = s11
-    board.LD12 = s12
-    board.LD13 = s13
-    board.LD14 = s14
-    board.LD15 = s15
+    # Seven-segment physical chase path, numbered 0..31:
+    #   0..3   top horizontals, left -> right
+    #   4..7   middle horizontals, right -> left
+    #   8..11  bottom horizontals, left -> right
+    #   12..19 lower verticals, right -> left
+    #   20..27 upper verticals, left -> right
+    #   28..31 decimal points, right -> left
+    # Each SWn XORs the two consecutive path positions 2n and 2n+1.
+    q0: uint1_t = (segment_position == 0) ^ board.SW0
+    q1: uint1_t = (segment_position == 1) ^ board.SW0
+    q2: uint1_t = (segment_position == 2) ^ board.SW1
+    q3: uint1_t = (segment_position == 3) ^ board.SW1
+    q4: uint1_t = (segment_position == 4) ^ board.SW2
+    q5: uint1_t = (segment_position == 5) ^ board.SW2
+    q6: uint1_t = (segment_position == 6) ^ board.SW3
+    q7: uint1_t = (segment_position == 7) ^ board.SW3
+    q8: uint1_t = (segment_position == 8) ^ board.SW4
+    q9: uint1_t = (segment_position == 9) ^ board.SW4
+    q10: uint1_t = (segment_position == 10) ^ board.SW5
+    q11: uint1_t = (segment_position == 11) ^ board.SW5
+    q12: uint1_t = (segment_position == 12) ^ board.SW6
+    q13: uint1_t = (segment_position == 13) ^ board.SW6
+    q14: uint1_t = (segment_position == 14) ^ board.SW7
+    q15: uint1_t = (segment_position == 15) ^ board.SW7
+    q16: uint1_t = (segment_position == 16) ^ board.SW8
+    q17: uint1_t = (segment_position == 17) ^ board.SW8
+    q18: uint1_t = (segment_position == 18) ^ board.SW9
+    q19: uint1_t = (segment_position == 19) ^ board.SW9
+    q20: uint1_t = (segment_position == 20) ^ board.SW10
+    q21: uint1_t = (segment_position == 21) ^ board.SW10
+    q22: uint1_t = (segment_position == 22) ^ board.SW11
+    q23: uint1_t = (segment_position == 23) ^ board.SW11
+    q24: uint1_t = (segment_position == 24) ^ board.SW12
+    q25: uint1_t = (segment_position == 25) ^ board.SW12
+    q26: uint1_t = (segment_position == 26) ^ board.SW13
+    q27: uint1_t = (segment_position == 27) ^ board.SW13
+    q28: uint1_t = (segment_position == 28) ^ board.SW14
+    q29: uint1_t = (segment_position == 29) ^ board.SW14
+    q30: uint1_t = (segment_position == 30) ^ board.SW15
+    q31: uint1_t = (segment_position == 31) ^ board.SW15
 
-    # The display is active-low. AN0 is the rightmost digit, matching LD0 at
-    # the right edge of the LED bank. Four pairs of segment LEDs live on each
-    # digit: CA/CB, CC/CD, CE/CF, and CG/DP.
+    # Active-low multiplexed display. AN0 is the rightmost digit and AN3 the
+    # leftmost digit. Map the numbered path above onto the physical segments.
     board.AN0 = 1
     board.AN1 = 1
     board.AN2 = 1
@@ -111,41 +144,41 @@ def led_chaser():
 
     if scan_digit == 0:
         board.AN0 = 0
-        board.CA = ~s0
-        board.CB = ~s0
-        board.CC = ~s1
-        board.CD = ~s1
-        board.CE = ~s2
-        board.CF = ~s2
-        board.CG = ~s3
-        board.DP = ~s3
+        board.CA = ~q3
+        board.CB = ~q27
+        board.CC = ~q12
+        board.CD = ~q11
+        board.CE = ~q13
+        board.CF = ~q26
+        board.CG = ~q4
+        board.DP = ~q28
     elif scan_digit == 1:
         board.AN1 = 0
-        board.CA = ~s4
-        board.CB = ~s4
-        board.CC = ~s5
-        board.CD = ~s5
-        board.CE = ~s6
-        board.CF = ~s6
-        board.CG = ~s7
-        board.DP = ~s7
+        board.CA = ~q2
+        board.CB = ~q25
+        board.CC = ~q14
+        board.CD = ~q10
+        board.CE = ~q15
+        board.CF = ~q24
+        board.CG = ~q5
+        board.DP = ~q29
     elif scan_digit == 2:
         board.AN2 = 0
-        board.CA = ~s8
-        board.CB = ~s8
-        board.CC = ~s9
-        board.CD = ~s9
-        board.CE = ~s10
-        board.CF = ~s10
-        board.CG = ~s11
-        board.DP = ~s11
+        board.CA = ~q1
+        board.CB = ~q23
+        board.CC = ~q16
+        board.CD = ~q9
+        board.CE = ~q17
+        board.CF = ~q22
+        board.CG = ~q6
+        board.DP = ~q30
     else:
         board.AN3 = 0
-        board.CA = ~s12
-        board.CB = ~s12
-        board.CC = ~s13
-        board.CD = ~s13
-        board.CE = ~s14
-        board.CF = ~s14
-        board.CG = ~s15
-        board.DP = ~s15
+        board.CA = ~q0
+        board.CB = ~q21
+        board.CC = ~q18
+        board.CD = ~q8
+        board.CE = ~q19
+        board.CF = ~q20
+        board.CG = ~q7
+        board.DP = ~q31
