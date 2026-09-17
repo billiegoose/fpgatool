@@ -54,7 +54,7 @@ def vga_timing_25mhz_from_100mhz() -> vga_timing_signals_t:
 
 
 def smpte_bars(sig: vga_timing_signals_t) -> vga_12bpp_t:
-    """Classic seven vertical bars: white, yellow, cyan, green, magenta, red, blue."""
+    """Seven colour bars with active-area alignment markers at the screen edges."""
     r: uint4_t = 0
     g: uint4_t = 0
     b: uint4_t = 0
@@ -88,6 +88,39 @@ def smpte_bars(sig: vga_timing_signals_t) -> vga_12bpp_t:
             r = 0
             g = 0
             b = 15
+
+        # Black alignment marks touch the exact 640x480 active-area edges.
+        # If a display overscans or our porch/sync timing is shifted, these
+        # strokes will be clipped or displaced asymmetrically.
+        corner = (
+            ((sig.pos.y < 4) & ((sig.pos.x < 24) | (sig.pos.x >= 616)))
+            | ((sig.pos.y >= 476) & ((sig.pos.x < 24) | (sig.pos.x >= 616)))
+            | ((sig.pos.x < 4) & ((sig.pos.y < 24) | (sig.pos.y >= 456)))
+            | ((sig.pos.x >= 636) & ((sig.pos.y < 24) | (sig.pos.y >= 456)))
+        )
+        edge_tick = (
+            (((sig.pos.x >= 318) & (sig.pos.x < 322)) & ((sig.pos.y < 16) | (sig.pos.y >= 464)))
+            | (((sig.pos.y >= 238) & (sig.pos.y < 242)) & ((sig.pos.x < 16) | (sig.pos.x >= 624)))
+        )
+
+        # A true 120-pixel-diameter circle at the exact center makes display
+        # aspect-ratio distortion obvious: 16:9 stretching turns it into an ellipse.
+        dx: uint10_t = 0
+        dy: uint10_t = 0
+        if sig.pos.x >= 320:
+            dx = sig.pos.x - 320
+        else:
+            dx = 320 - sig.pos.x
+        if sig.pos.y >= 240:
+            dy = sig.pos.y - 240
+        else:
+            dy = 240 - sig.pos.y
+        center_circle = ((dx * dx) + (dy * dy)) <= 3600
+
+        if corner | edge_tick | center_circle:
+            r = 0
+            g = 0
+            b = 0
 
     return vga_12bpp_t(r=r, g=g, b=b, hs=sig.hsync, vs=sig.vsync)
 
