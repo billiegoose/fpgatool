@@ -133,7 +133,7 @@ class FPGAToolTests(unittest.TestCase):
 
     def test_comb_is_opt_in(self):
         normal = fpgatool.parser().parse_args(["build", "examples/blink.py"])
-        comb = fpgatool.parser().parse_args(["run", "examples/vga_smpte.py", "--comb"])
+        comb = fpgatool.parser().parse_args(["run", "examples/vga_test_bars.py", "--comb"])
         self.assertFalse(normal.comb)
         self.assertTrue(comb.comb)
 

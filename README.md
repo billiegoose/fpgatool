@@ -56,6 +56,10 @@ Normal builds keep the underlying Nix/PipelineC/programmer output quiet and save
 as `build.log`, `load.log`, or `program.log` beside the design output. Pass
 `--verbose` (or `-v`) to stream the full tool output directly to the terminal.
 
+## Example structure
+
+Top-level `examples/*.py` files are complete board-facing designs: they own `@MAIN(100.0)` entry points and physical board interfaces. Reusable, board-agnostic hardware functions live under `examples/hardware/` and contain neither `@MAIN` declarations nor `board.*` imports. `examples/kitchen_sink_demo.py` demonstrates composition by combining the LED/seven-segment chaser, UART echo, VGA test bars, and mouse cursor blocks in one design.
+
 ## Basys 3 peripheral coverage
 
 The Basys 3 support is intentionally built out as small, composable Pypeline modules so
@@ -68,7 +72,7 @@ examples can double as reference designs for individual board features.
 | 16 user LEDs | Supported. |
 | 5 pushbuttons | Supported. |
 | 4-digit seven-segment display | Supported, including multiplexed scanning in `examples/led_chaser.py`. |
-| 12-bit VGA output | Supported; `examples/vga_smpte.py` provides a hardware-verified 640x480 diagnostic. |
+| 12-bit VGA output | Supported; `examples/vga_test_bars.py` provides the hardware-verified 640x480 bars/geometry diagnostic, while `examples/mouse_demo.py` exercises the PS/2 mouse cursor independently. |
 | USB-UART bridge | Supported at 115200 baud by the reusable UART transport example. |
 | USB HID mouse through the PIC24 PS/2 bridge | Supported, including three buttons and IntelliMouse wheel negotiation. |
 | USB HID keyboard through the PIC24 PS/2 bridge | Deferred. The bridge recognized tested keyboards at attach time but did not forward keypress scan codes; see the investigation note below. |
