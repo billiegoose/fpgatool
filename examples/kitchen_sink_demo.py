@@ -8,11 +8,11 @@ simultaneously. Top-level examples own pins; reusable logic lives under
 """
 
 from pypeline import *
-import board.basys3.part35t
-import board.basys3.user_io as board_user
-import board.basys3.uart as board_uart
-import board.basys3.vga as board_vga
-import board.basys3.ps2_mouse as board_mouse
+import fpgatool_board.basys3.part35t
+import fpgatool_board.basys3.user_io as board_user
+import fpgatool_board.basys3.uart as board_uart
+import fpgatool_board.basys3.vga as board_vga
+import fpgatool_board.basys3.ps2_mouse as board_mouse
 import hardware.led_chaser as led_hw
 import hardware.uart as uart_hw
 import hardware.vga_timing as vga_timing

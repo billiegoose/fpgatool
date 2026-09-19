@@ -2,8 +2,8 @@
 """640x480 VGA test bars and geometry markers on the Basys 3."""
 
 from pypeline import *
-import board.basys3.part35t
-import board.basys3.vga as board_vga
+import fpgatool_board.basys3.part35t
+import fpgatool_board.basys3.vga as board_vga
 import hardware.vga_timing as timing
 import hardware.vga_test_bars as bars
 

@@ -7,7 +7,7 @@ chipdb = "xc7a35tcpg236.bin"
 
 [backend]
 type = "pipelinec-openxc7"
-constraints = "include/pypeline/board/basys3/pins.xdc"
+constraints = "boards/basys3/pins.xdc"
 
 [programmer]
 type = "openfpgaloader"

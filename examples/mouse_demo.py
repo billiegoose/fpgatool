@@ -2,9 +2,9 @@
 """Basys 3 PS/2 mouse cursor diagnostic on a plain black VGA background."""
 
 from pypeline import *
-import board.basys3.part35t
-import board.basys3.vga as board_vga
-import board.basys3.ps2_mouse as board_mouse
+import fpgatool_board.basys3.part35t
+import fpgatool_board.basys3.vga as board_vga
+import fpgatool_board.basys3.ps2_mouse as board_mouse
 import hardware.vga_timing as timing
 import hardware.mouse_cursor as cursor
 

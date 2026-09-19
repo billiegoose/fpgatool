@@ -7,9 +7,9 @@ Top-level examples own board pins and clocks. Reusable UART hardware lives in
 """
 
 from pypeline import *
-import board.basys3.part35t
-import board.basys3.uart as board_uart
-import board.basys3.user_io as board_user
+import fpgatool_board.basys3.part35t
+import fpgatool_board.basys3.uart as board_uart
+import fpgatool_board.basys3.user_io as board_user
 import hardware.uart as uart
 
 

@@ -22,7 +22,7 @@ fi
 : "${PRJXRAY_DB_DIR:?missing Project X-Ray DB from OpenXC7 Nix shell}"
 
 chipdb="$FPGA_TOOL_CHIPDB_DIR/$chipdb_name"
-constraints="$pipelinec_dir/$constraints_rel"
+constraints="/workspace/$constraints_rel"
 
 [ -f "$source_file" ] || { echo "design not found: $source_file" >&2; exit 1; }
 [ -f "$constraints" ] || { echo "constraints not found: $constraints" >&2; exit 1; }

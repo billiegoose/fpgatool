@@ -3,8 +3,8 @@
 """Exercise Basys 3 LEDs, switches, buttons, and seven-segment display."""
 
 from pypeline import *
-import board.basys3.part35t
-import board.basys3.user_io as board_user
+import fpgatool_board.basys3.part35t
+import fpgatool_board.basys3.user_io as board_user
 import hardware.led_chaser as hw
 
 

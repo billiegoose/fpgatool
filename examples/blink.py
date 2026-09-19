@@ -3,8 +3,8 @@
 """Blink Basys 3 LD0 at 1 Hz from its 100 MHz oscillator."""
 
 from pypeline import *
-import board.basys3.part35t
-import board.basys3.user_io as board_user
+import fpgatool_board.basys3.part35t
+import fpgatool_board.basys3.user_io as board_user
 import hardware.blink as hw
 
 
