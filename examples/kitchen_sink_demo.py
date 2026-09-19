@@ -8,66 +8,93 @@ simultaneously. Top-level examples own pins; reusable logic lives under
 """
 
 from pypeline import *
+from vga.types import vga_12bpp_t
 import fpgatool_board.basys3.part35t
-import fpgatool_board.basys3.user_io as board_user
+import fpgatool_board.basys3.leds as board_leds
+import fpgatool_board.basys3.switches as board_switches
+import fpgatool_board.basys3.buttons as board_buttons
+import fpgatool_board.basys3.seven_segment as board_seven_segment
 import fpgatool_board.basys3.uart as board_uart
 import fpgatool_board.basys3.vga as board_vga
-import fpgatool_board.basys3.ps2_mouse as board_mouse
+import fpgatool_board.basys3.ps2 as board_ps2
 import hardware.led_chaser as led_hw
 import hardware.uart as uart_hw
 import hardware.vga_timing as vga_timing
 import hardware.vga_test_bars as vga_bars
 import hardware.mouse_cursor as mouse_cursor
+import hardware.ps2_mouse as ps2_mouse_hw
+
+
+@hw_func
+def write_vga_pins(px: vga_12bpp_t):
+    board_vga.VGA_R0 = px.r[0]
+    board_vga.VGA_R1 = px.r[1]
+    board_vga.VGA_R2 = px.r[2]
+    board_vga.VGA_R3 = px.r[3]
+    board_vga.VGA_G0 = px.g[0]
+    board_vga.VGA_G1 = px.g[1]
+    board_vga.VGA_G2 = px.g[2]
+    board_vga.VGA_G3 = px.g[3]
+    board_vga.VGA_B0 = px.b[0]
+    board_vga.VGA_B1 = px.b[1]
+    board_vga.VGA_B2 = px.b[2]
+    board_vga.VGA_B3 = px.b[3]
+    board_vga.VGA_HS = px.hs
+    board_vga.VGA_VS = px.vs
 
 
 @MAIN(100.0)
 def kitchen_sink_demo():
     user = led_hw.led_chaser(
-        board_user.SW0, board_user.SW1, board_user.SW2, board_user.SW3,
-        board_user.SW4, board_user.SW5, board_user.SW6, board_user.SW7,
-        board_user.SW8, board_user.SW9, board_user.SW10, board_user.SW11,
-        board_user.SW12, board_user.SW13, board_user.SW14, board_user.SW15,
-        board_user.BTNL, board_user.BTNR, board_user.BTNU,
-        board_user.BTND, board_user.BTNC,
+        board_switches.SW0, board_switches.SW1, board_switches.SW2, board_switches.SW3,
+        board_switches.SW4, board_switches.SW5, board_switches.SW6, board_switches.SW7,
+        board_switches.SW8, board_switches.SW9, board_switches.SW10, board_switches.SW11,
+        board_switches.SW12, board_switches.SW13, board_switches.SW14, board_switches.SW15,
+        board_buttons.BTNL, board_buttons.BTNR, board_buttons.BTNU,
+        board_buttons.BTND, board_buttons.BTNC,
     )
 
-    board_user.LD0 = user.ld0
-    board_user.LD1 = user.ld1
-    board_user.LD2 = user.ld2
-    board_user.LD3 = user.ld3
-    board_user.LD4 = user.ld4
-    board_user.LD5 = user.ld5
-    board_user.LD6 = user.ld6
-    board_user.LD7 = user.ld7
-    board_user.LD8 = user.ld8
-    board_user.LD9 = user.ld9
-    board_user.LD10 = user.ld10
-    board_user.LD11 = user.ld11
-    board_user.LD12 = user.ld12
-    board_user.LD13 = user.ld13
-    board_user.LD14 = user.ld14
-    board_user.LD15 = user.ld15
+    board_leds.LD0 = user.ld0
+    board_leds.LD1 = user.ld1
+    board_leds.LD2 = user.ld2
+    board_leds.LD3 = user.ld3
+    board_leds.LD4 = user.ld4
+    board_leds.LD5 = user.ld5
+    board_leds.LD6 = user.ld6
+    board_leds.LD7 = user.ld7
+    board_leds.LD8 = user.ld8
+    board_leds.LD9 = user.ld9
+    board_leds.LD10 = user.ld10
+    board_leds.LD11 = user.ld11
+    board_leds.LD12 = user.ld12
+    board_leds.LD13 = user.ld13
+    board_leds.LD14 = user.ld14
+    board_leds.LD15 = user.ld15
 
-    board_user.AN0 = user.an0
-    board_user.AN1 = user.an1
-    board_user.AN2 = user.an2
-    board_user.AN3 = user.an3
-    board_user.CA = user.ca
-    board_user.CB = user.cb
-    board_user.CC = user.cc
-    board_user.CD = user.cd
-    board_user.CE = user.ce
-    board_user.CF = user.cf
-    board_user.CG = user.cg
-    board_user.DP = user.dp
+    board_seven_segment.AN0 = user.an0
+    board_seven_segment.AN1 = user.an1
+    board_seven_segment.AN2 = user.an2
+    board_seven_segment.AN3 = user.an3
+    board_seven_segment.CA = user.ca
+    board_seven_segment.CB = user.cb
+    board_seven_segment.CC = user.cc
+    board_seven_segment.CD = user.cd
+    board_seven_segment.CE = user.ce
+    board_seven_segment.CF = user.cf
+    board_seven_segment.CG = user.cg
+    board_seven_segment.DP = user.dp
 
     uart = uart_hw.uart_echo(board_uart.RsRx, uint8_t(0), uint8_t(0))
     board_uart.RsTx = uart.tx
 
     sig = vga_timing.vga_timing_25mhz_from_100mhz()
     bg = vga_bars.test_bars(sig)
-    mouse = board_mouse.mouse
-    board_vga.vga = mouse_cursor.overlay_cursor(
+
+    mouse = ps2_mouse_hw.ps2_mouse(board_ps2.PS2Clk, board_ps2.PS2Data)
+    board_ps2.PS2Clk = mouse.clk_release
+    board_ps2.PS2Data = mouse.data_release
+
+    write_vga_pins(mouse_cursor.overlay_cursor(
         sig,
         bg,
         mouse.x,
@@ -77,4 +104,4 @@ def kitchen_sink_demo():
         mouse.right,
         mouse.wheel,
         mouse.wheel_mode,
-    )
+    ))
