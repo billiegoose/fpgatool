@@ -123,8 +123,8 @@ def ps2_mouse(ps2_clk: uint1_t, ps2_data: uint1_t) -> ps2_mouse_io_t:
     data_meta = ps2_data
 
     # Open-drain defaults: release both lines.  States below only ever pull low.
-    clk_release = 1
-    data_release = 1
+    clk_release: uint1_t = 1
+    data_release: uint1_t = 1
 
     # Byte-complete pulse and value derived by the receive state machine below.
     rx_valid: uint1_t = 0

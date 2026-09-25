@@ -181,6 +181,16 @@ class FPGAToolTests(unittest.TestCase):
         self.assertIn("FPGATOOL_FINAL_TOP_VHDL", script)
         self.assertIn("unsigned\'(0 => \'0\')", ps2)
 
+    def test_ps2_release_controls_are_explicit_uint1_t_locals(self):
+        ps2 = (ROOT / "examples" / "hardware" / "ps2_mouse.py").read_text()
+        # These annotations are semantically important to PipelineC elaboration.
+        # Without them, the generated return struct collapsed both tristate
+        # controls to constant zero, permanently holding the PS/2 pads low.
+        self.assertIn("clk_release: uint1_t = 1", ps2)
+        self.assertIn("data_release: uint1_t = 1", ps2)
+        self.assertNotIn("\n    clk_release = 1\n", ps2)
+        self.assertNotIn("\n    data_release = 1\n", ps2)
+
     def test_default_bitstream_is_stable(self):
         source = (fpgatool.ROOT / "examples" / "blink.py").resolve()
         self.assertEqual(
