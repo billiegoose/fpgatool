@@ -137,6 +137,12 @@ class FPGAToolTests(unittest.TestCase):
         self.assertFalse(normal.comb)
         self.assertTrue(comb.comb)
 
+    def test_build_wrapper_uses_merged_openxc7_interface(self):
+        script = (ROOT / "toolchain" / "build-pipelinec.sh").read_text()
+        self.assertIn('--syn_tool open_tools', script)
+        self.assertIn('--part "$part"', script)
+        self.assertNotIn('--syn_tool openxc7', script)
+
     def test_build_wrapper_forwards_comb_only_when_requested(self):
         script = (ROOT / "toolchain" / "build-pipelinec.sh").read_text()
         self.assertIn('if [ "$comb_arg" = "--comb" ]; then', script)

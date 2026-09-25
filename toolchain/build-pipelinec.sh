@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -lt 5 ] || [ "$#" -gt 6 ]; then
-  echo "usage: build-pipelinec.sh PIPELINEC_DIR SOURCE OUT_DIR CONSTRAINTS CHIPDB_NAME [--comb]" >&2
+if [ "$#" -lt 6 ] || [ "$#" -gt 7 ]; then
+  echo "usage: build-pipelinec.sh PIPELINEC_DIR SOURCE OUT_DIR CONSTRAINTS PART CHIPDB_NAME [--comb]" >&2
   exit 2
 fi
 
@@ -10,8 +10,9 @@ pipelinec_dir="$1"
 source_file="$2"
 out_dir="$3"
 constraints_rel="$4"
-chipdb_name="$5"
-comb_arg="${6:-}"
+part="$5"
+chipdb_name="$6"
+comb_arg="${7:-}"
 if [ -n "$comb_arg" ] && [ "$comb_arg" != "--comb" ]; then
   echo "unknown build-pipelinec.sh option: $comb_arg" >&2
   exit 2
@@ -42,7 +43,8 @@ export PYTHONPATH="$pipelinec_dir/include/pypeline${PYTHONPATH:+:$PYTHONPATH}"
 
 pipelinec_args=(
   "$source_file"
-  --syn_tool openxc7
+  --syn_tool open_tools
+  --part "$part"
   --no_sweep
 )
 if [ "$comb_arg" = "--comb" ]; then

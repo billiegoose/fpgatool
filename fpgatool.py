@@ -255,6 +255,7 @@ def cmd_build(args: argparse.Namespace) -> Path:
         container_design_path(source),
         container_build_dir(args.board, source),
         pc_constraints,
+        board["fpga"]["part"],
         board["fpga"]["chipdb"],
     ]
     if getattr(args, "comb", False):
