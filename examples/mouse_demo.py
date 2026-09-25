@@ -34,9 +34,9 @@ def mouse_demo():
     sig = timing.vga_timing_25mhz_from_100mhz()
     bg = cursor.black_background(sig)
 
-    mouse = ps2_mouse_hw.ps2_mouse(board_ps2.PS2Clk, board_ps2.PS2Data)
-    board_ps2.PS2Clk = mouse.clk_release
-    board_ps2.PS2Data = mouse.data_release
+    mouse = ps2_mouse_hw.ps2_mouse(board_ps2.PS2Clk_I, board_ps2.PS2Data_I)
+    board_ps2.PS2Clk_T = mouse.clk_release
+    board_ps2.PS2Data_T = mouse.data_release
 
     write_vga_pins(cursor.overlay_cursor(
         sig,

@@ -33,9 +33,11 @@ rm -rf "$out_dir/pipelinec"
 mkdir -p "$out_dir/pipelinec"
 
 export OPENXC7_CHIPDB="$chipdb"
-# PipelineC caches measured primitive delays. Keep that cache in the writable
-# per-design build tree because the pinned compiler checkout is mounted read-only.
-export PYPELINEC_PATH_DELAY_CACHE_DIR="$out_dir/path_delay_cache"
+# PipelineC caches measured synthesis data under one cache root. Keep that
+# cache in the writable per-design build tree because the pinned compiler
+# checkout is mounted read-only.
+export PYPELINEC_CACHE_DIR="$out_dir/cache"
+export FPGATOOL_FINAL_TOP_VHDL="$out_dir/pipelinec/top/top.vhd"
 
 # The source lives outside PipelineC, so make its reusable Pypeline library and
 # board modules importable without making host PYTHONPATH part of the contract.
@@ -45,7 +47,6 @@ pipelinec_args=(
   "$source_file"
   --syn_tool open_tools
   --part "$part"
-  --no_sweep
 )
 if [ "$comb_arg" = "--comb" ]; then
   pipelinec_args+=(--comb)

@@ -142,6 +142,7 @@ class FPGAToolTests(unittest.TestCase):
         self.assertIn('--syn_tool open_tools', script)
         self.assertIn('--part "$part"', script)
         self.assertNotIn('--syn_tool openxc7', script)
+        self.assertNotIn('--no_sweep', script)
 
     def test_build_wrapper_forwards_comb_only_when_requested(self):
         script = (ROOT / "toolchain" / "build-pipelinec.sh").read_text()
@@ -161,12 +162,24 @@ class FPGAToolTests(unittest.TestCase):
         finally:
             log.unlink(missing_ok=True)
 
-    def test_pipelinec_delay_cache_is_writable_build_output(self):
+    def test_pipelinec_cache_is_writable_build_output(self):
         script = (ROOT / "toolchain" / "build-pipelinec.sh").read_text()
         self.assertIn(
-            'export PYPELINEC_PATH_DELAY_CACHE_DIR="$out_dir/path_delay_cache"',
+            'export PYPELINEC_CACHE_DIR="$out_dir/cache"',
             script,
         )
+        self.assertNotIn("PYPELINEC_PATH_DELAY_CACHE_DIR", script)
+
+    def test_basys3_ps2_uses_split_unidirectional_io(self):
+        ps2 = (ROOT / "examples" / "fpgatool_board" / "basys3" / "ps2.py").read_text()
+        self.assertNotIn("OpenDrain", ps2)
+        self.assertIn("PS2Clk_I: Input[uint1_t]", ps2)
+        self.assertIn("PS2Clk_T: Output[uint1_t]", ps2)
+        self.assertIn("PS2Data_I: Input[uint1_t]", ps2)
+        self.assertIn("PS2Data_T: Output[uint1_t]", ps2)
+        script = (ROOT / "toolchain" / "build-pipelinec.sh").read_text()
+        self.assertIn("FPGATOOL_FINAL_TOP_VHDL", script)
+        self.assertIn("unsigned\'(0 => \'0\')", ps2)
 
     def test_default_bitstream_is_stable(self):
         source = (fpgatool.ROOT / "examples" / "blink.py").resolve()
