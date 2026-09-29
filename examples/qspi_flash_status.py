@@ -12,7 +12,7 @@ import fpgatool_board.basys3.part35t
 import fpgatool_board.basys3.qspi as board_qspi
 import fpgatool_board.basys3.leds as board_leds
 import fpgatool_board.basys3.seven_segment as board_seven_segment
-import hardware.qspi_flash_status as qspi_status
+import hardware.qspi_flash as qspi_flash
 
 
 def _hex_segments(value: uint4_t) -> uint7_t:
@@ -54,7 +54,7 @@ def _hex_segments(value: uint4_t) -> uint7_t:
 
 @MAIN(100.0)
 def qspi_flash_status():
-    flash = qspi_status.read_status_and_test_wren(board_qspi.QspiDQ1)
+    flash = qspi_flash.read_status_and_test_wren(board_qspi.QspiDQ1)
 
     board_qspi.QspiCSn = board_qspi.drive_clock_and_cs(
         flash.cclk, flash.cs_n, flash.ready

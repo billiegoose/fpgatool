@@ -5,7 +5,8 @@
 On boot the four-digit decimal value is read from a reserved 64 KiB block at
 the end of the 32-Mbit configuration flash. BTNU increments, BTND decrements,
 and BTNC saves the current value. The save path erases only that reserved user
-block, page-programs a small checked record, and reads it back for verification.
+block, programs a four-byte checked record through the generic flash interface,
+and verifies each programmed byte.
 
 Program this demo itself persistently once, save a number with BTNC, then power
 cycle/reset the board: the number is loaded from flash again at startup.
@@ -17,7 +18,7 @@ import fpgatool_board.basys3.qspi as board_qspi
 import fpgatool_board.basys3.buttons as board_buttons
 import fpgatool_board.basys3.leds as board_leds
 import fpgatool_board.basys3.seven_segment as board_seven_segment
-import hardware.qspi_flash_rw as qspi_rw
+import hardware.qspi_flash as qspi_flash
 
 
 def _hex_segments(value: uint4_t) -> uint7_t:
@@ -95,6 +96,191 @@ def _bcd_decrement(value: uint16_t) -> uint16_t:
     return result
 
 
+
+_USER_BLOCK_ADDRESS = 0x3F0000
+_MAGIC = 0xA5
+_CHECK_SALT = 0x5A
+
+_ST_BOOT_READY = 0
+_ST_BOOT_LAUNCH = 1
+_ST_BOOT_WAIT = 2
+_ST_READY = 3
+_ST_ERASE_READY = 4
+_ST_ERASE_LAUNCH = 5
+_ST_ERASE_WAIT = 6
+_ST_PROGRAM_READY = 7
+_ST_PROGRAM_LAUNCH = 8
+_ST_PROGRAM_WAIT = 9
+
+
+@struct
+class qspi_flash_store_t(NamedTuple):
+    cclk: uint1_t
+    cs_n: uint1_t
+    dq0: uint1_t
+    dq2: uint1_t
+    dq3: uint1_t
+    value_bcd: uint16_t
+    valid: uint1_t
+    busy: uint1_t
+    save_done: uint1_t
+    save_error: uint1_t
+
+
+@hw_func
+def persistent_bcd_store(
+    dq1: uint1_t, save: uint1_t, value_to_save: uint16_t
+) -> qspi_flash_store_t:
+    state: Reg[uint4_t] = _ST_BOOT_READY
+    byte_index: Reg[uint3_t] = 0
+
+    boot_magic: Reg[uint8_t] = 0
+    boot_hi: Reg[uint8_t] = 0
+    boot_lo: Reg[uint8_t] = 0
+    stored_value: Reg[uint16_t] = 0
+    stored_valid: Reg[uint1_t] = 0
+    requested_value: Reg[uint16_t] = 0
+    save_done: Reg[uint1_t] = 0
+    save_error: Reg[uint1_t] = 0
+
+    save_done = 0
+
+    op: uint2_t = qspi_flash.FLASH_OP_NONE
+    address: uint32_t = uint32_t(_USER_BLOCK_ADDRESS)
+    write_data: uint8_t = 0
+
+    if state == _ST_BOOT_LAUNCH:
+        op = qspi_flash.FLASH_OP_READ
+        address = uint32_t(_USER_BLOCK_ADDRESS) + byte_index
+    elif state == _ST_ERASE_LAUNCH:
+        op = qspi_flash.FLASH_OP_ERASE_BLOCK
+    elif state == _ST_PROGRAM_LAUNCH:
+        op = qspi_flash.FLASH_OP_PROGRAM
+        address = uint32_t(_USER_BLOCK_ADDRESS) + byte_index
+        value_hi: uint8_t = requested_value[15:8]
+        value_lo: uint8_t = requested_value[7:0]
+        check: uint8_t = uint8_t(_MAGIC) ^ value_hi ^ value_lo ^ uint8_t(_CHECK_SALT)
+        if byte_index == 0:
+            write_data = uint8_t(_MAGIC)
+        elif byte_index == 1:
+            write_data = value_hi
+        elif byte_index == 2:
+            write_data = value_lo
+        else:
+            write_data = check
+
+    flash = qspi_flash.flash_byte_io(dq1, op, address, write_data)
+
+    if state == _ST_BOOT_READY:
+        if flash.ready:
+            state = _ST_BOOT_LAUNCH
+
+    elif state == _ST_BOOT_LAUNCH:
+        # flash was observed ready on the previous clock, so this one-cycle
+        # request is guaranteed to be sampled.
+        state = _ST_BOOT_WAIT
+
+    elif state == _ST_BOOT_WAIT:
+        if flash.done:
+            if byte_index == 0:
+                boot_magic = flash.read_data
+                byte_index = 1
+                state = _ST_BOOT_READY
+            elif byte_index == 1:
+                boot_hi = flash.read_data
+                byte_index = 2
+                state = _ST_BOOT_READY
+            elif byte_index == 2:
+                boot_lo = flash.read_data
+                byte_index = 3
+                state = _ST_BOOT_READY
+            else:
+                expected: uint8_t = uint8_t(_MAGIC) ^ boot_hi ^ boot_lo ^ uint8_t(_CHECK_SALT)
+                value: uint16_t = concat(boot_hi, boot_lo)
+                bcd_valid: uint1_t = 1
+                if boot_hi[7:4] > 9:
+                    bcd_valid = 0
+                elif boot_hi[3:0] > 9:
+                    bcd_valid = 0
+                elif boot_lo[7:4] > 9:
+                    bcd_valid = 0
+                elif boot_lo[3:0] > 9:
+                    bcd_valid = 0
+                if boot_magic == _MAGIC and flash.read_data == expected and bcd_valid:
+                    stored_value = value
+                    stored_valid = 1
+                else:
+                    stored_value = 0
+                    stored_valid = 0
+                byte_index = 0
+                state = _ST_READY
+
+    elif state == _ST_READY:
+        if save:
+            requested_value = value_to_save
+            save_error = 0
+            byte_index = 0
+            state = _ST_ERASE_READY
+
+    elif state == _ST_ERASE_READY:
+        if flash.ready:
+            state = _ST_ERASE_LAUNCH
+
+    elif state == _ST_ERASE_LAUNCH:
+        state = _ST_ERASE_WAIT
+
+    elif state == _ST_ERASE_WAIT:
+        if flash.done:
+            if flash.error:
+                save_error = 1
+                save_done = 1
+                state = _ST_READY
+            else:
+                byte_index = 0
+                state = _ST_PROGRAM_READY
+
+    elif state == _ST_PROGRAM_READY:
+        if flash.ready:
+            state = _ST_PROGRAM_LAUNCH
+
+    elif state == _ST_PROGRAM_LAUNCH:
+        state = _ST_PROGRAM_WAIT
+
+    elif state == _ST_PROGRAM_WAIT:
+        if flash.done:
+            if flash.error:
+                save_error = 1
+                save_done = 1
+                state = _ST_READY
+            elif byte_index < 3:
+                byte_index = byte_index + 1
+                state = _ST_PROGRAM_READY
+            else:
+                stored_value = requested_value
+                stored_valid = 1
+                save_error = 0
+                save_done = 1
+                byte_index = 0
+                state = _ST_READY
+
+    busy: uint1_t = 1
+    if state == _ST_READY:
+        busy = 0
+
+    return qspi_flash_store_t(
+        cclk=flash.cclk,
+        cs_n=flash.cs_n,
+        dq0=flash.dq0,
+        dq2=flash.dq2,
+        dq3=flash.dq3,
+        value_bcd=stored_value,
+        valid=stored_valid,
+        busy=busy,
+        save_done=save_done,
+        save_error=save_error,
+    )
+
+
 @MAIN(100.0)
 def qspi_flash_rw():
     display_value: Reg[uint16_t] = 0
@@ -126,7 +312,7 @@ def qspi_flash_rw():
     down_prev = board_buttons.BTND
     center_prev = board_buttons.BTNC
 
-    flash = qspi_rw.persistent_bcd_store(board_qspi.QspiDQ1, save_event, display_value)
+    flash = persistent_bcd_store(board_qspi.QspiDQ1, save_event, display_value)
 
     # USRCCLKTS is active-high. Keep CCLK enabled while the flash controller is
     # busy and tri-state it when idle; importantly, this is a routed fabric

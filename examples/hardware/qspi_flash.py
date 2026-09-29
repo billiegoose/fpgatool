@@ -665,3 +665,173 @@ def flash_byte_io(
         done=done,
         error=error,
     )
+
+
+# Status/WREN diagnostic --------------------------------------------------------------
+#
+# This is kept in the same canonical flash module so examples do not carry a
+# second physical SPI implementation module.  It intentionally issues no erase
+# or program command.
+
+_STATUS_RDSR_COMMAND = 0x0500000000000000
+_STATUS_WREN_COMMAND = 0x0600000000000000
+
+_STATUS_ST_POWERUP = 0
+_STATUS_ST_READ_BEFORE = 1
+_STATUS_ST_READ_BEFORE_DONE = 2
+_STATUS_ST_WREN = 3
+_STATUS_ST_READ_AFTER = 4
+_STATUS_ST_READ_AFTER_DONE = 5
+_STATUS_ST_DONE = 6
+_STATUS_ST_BUS = 7
+_STATUS_ST_BUS_RX_FINISH = 8
+_STATUS_ST_BUS_TX_FINISH = 9
+_STATUS_ST_BUS_CS_HIGH = 10
+
+@struct
+class qspi_flash_status_t(NamedTuple):
+    cclk: uint1_t
+    cs_n: uint1_t
+    dq0: uint1_t
+    dq2: uint1_t
+    dq3: uint1_t
+    status_before: uint8_t
+    status_after: uint8_t
+    ready: uint1_t
+
+
+@hw_func
+def read_status_and_test_wren(dq1: uint1_t) -> qspi_flash_status_t:
+    state: Reg[uint4_t] = _STATUS_ST_POWERUP
+    return_state: Reg[uint4_t] = _STATUS_ST_DONE
+    timer: Reg[uint32_t] = 0
+
+    cclk: Reg[uint1_t] = 0
+    cs_n: Reg[uint1_t] = 1
+    tx_shift: Reg[uint64_t] = 0
+    tx_remaining: Reg[uint7_t] = 0
+    rx_remaining: Reg[uint7_t] = 0
+    rx_shift: Reg[uint64_t] = 0
+
+    status_before: Reg[uint8_t] = 0
+    status_after: Reg[uint8_t] = 0
+    ready: Reg[uint1_t] = 0
+
+    if state == _STATUS_ST_POWERUP:
+        cclk = 0
+        cs_n = 1
+        if timer >= (_BYTE_POWERUP_CYCLES - 1):
+            timer = 0
+            state = _STATUS_ST_READ_BEFORE
+        else:
+            timer = timer + 1
+
+    elif state == _STATUS_ST_READ_BEFORE:
+        tx_shift = uint64_t(_STATUS_RDSR_COMMAND)
+        tx_remaining = 8
+        rx_remaining = 8
+        rx_shift = 0
+        return_state = _STATUS_ST_READ_BEFORE_DONE
+        timer = 0
+        cclk = 0
+        cs_n = 0
+        state = _STATUS_ST_BUS
+
+    elif state == _STATUS_ST_READ_BEFORE_DONE:
+        status_before = rx_shift[7:0]
+        state = _STATUS_ST_WREN
+
+    elif state == _STATUS_ST_WREN:
+        tx_shift = uint64_t(_STATUS_WREN_COMMAND)
+        tx_remaining = 8
+        rx_remaining = 0
+        rx_shift = 0
+        return_state = _STATUS_ST_READ_AFTER
+        timer = 0
+        cclk = 0
+        cs_n = 0
+        state = _STATUS_ST_BUS
+
+    elif state == _STATUS_ST_READ_AFTER:
+        tx_shift = uint64_t(_STATUS_RDSR_COMMAND)
+        tx_remaining = 8
+        rx_remaining = 8
+        rx_shift = 0
+        return_state = _STATUS_ST_READ_AFTER_DONE
+        timer = 0
+        cclk = 0
+        cs_n = 0
+        state = _STATUS_ST_BUS
+
+    elif state == _STATUS_ST_READ_AFTER_DONE:
+        status_after = rx_shift[7:0]
+        ready = 1
+        state = _STATUS_ST_DONE
+
+    elif state == _STATUS_ST_DONE:
+        cclk = 0
+        cs_n = 1
+
+    elif state == _STATUS_ST_BUS:
+        if timer >= (_HALF_PERIOD_CYCLES - 1):
+            timer = 0
+            if cclk == 0:
+                cclk = 1
+                if tx_remaining == 0 and rx_remaining > 0:
+                    rx_shift = (rx_shift << 1) | dq1
+                    if rx_remaining == 1:
+                        rx_remaining = 0
+                        state = _STATUS_ST_BUS_RX_FINISH
+                    else:
+                        rx_remaining = rx_remaining - 1
+            else:
+                cclk = 0
+                if tx_remaining > 0:
+                    tx_shift = tx_shift << 1
+                    if tx_remaining == 1:
+                        tx_remaining = 0
+                        if rx_remaining == 0:
+                            state = _STATUS_ST_BUS_TX_FINISH
+                    else:
+                        tx_remaining = tx_remaining - 1
+        else:
+            timer = timer + 1
+
+    elif state == _STATUS_ST_BUS_RX_FINISH:
+        if timer >= (_HALF_PERIOD_CYCLES - 1):
+            timer = 0
+            cclk = 0
+            cs_n = 1
+            state = _STATUS_ST_BUS_CS_HIGH
+        else:
+            timer = timer + 1
+
+    elif state == _STATUS_ST_BUS_TX_FINISH:
+        cs_n = 1
+        cclk = 0
+        timer = 0
+        state = _STATUS_ST_BUS_CS_HIGH
+
+    else:  # _STATUS_ST_BUS_CS_HIGH
+        cs_n = 1
+        cclk = 0
+        if timer >= (_BYTE_NORMAL_CS_HIGH_CYCLES - 1):
+            timer = 0
+            state = return_state
+        else:
+            timer = timer + 1
+
+    dq0: uint1_t = 0
+    if state == _STATUS_ST_BUS and tx_remaining > 0:
+        dq0 = tx_shift[63]
+
+    return qspi_flash_status_t(
+        cclk=cclk,
+        cs_n=cs_n,
+        dq0=dq0,
+        dq2=1,
+        dq3=1,
+        status_before=status_before,
+        status_after=status_after,
+        ready=ready,
+    )
