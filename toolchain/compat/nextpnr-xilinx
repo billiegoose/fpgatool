@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REAL="__FPGATOOL_REAL_NEXTPNR_HIMBAECHEL__"
+ARGS=()
+CHIPDB=
+XDC=
+FASM=
+PREPACK=
+
+need_value() {
+    if [ "$#" -lt 2 ]; then
+        echo "compat shim: $1 requires a value" >&2
+        exit 2
+    fi
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --chipdb)
+            need_value "$@"; CHIPDB="$2"; shift 2 ;;
+        --xdc)
+            need_value "$@"; XDC="$2"; shift 2 ;;
+        --fasm)
+            need_value "$@"; FASM="$2"; shift 2 ;;
+        --json)
+            need_value "$@"; ARGS+=(--json "$2"); shift 2 ;;
+        --pre-pack)
+            need_value "$@"; PREPACK="$2"; shift 2 ;;
+        *)
+            ARGS+=("$1"); shift ;;
+    esac
+done
+
+if [ -z "$CHIPDB" ]; then
+    echo 'compat shim: --chipdb is required' >&2
+    exit 2
+fi
+
+DIE=${CHIPDB##*/}
+DIE=${DIE#chipdb-}
+DIE=${DIE%.bin}
+ARGS+=(--chipdb "$CHIPDB" --device "$DIE")
+
+TMP_XDC=
+cleanup() {
+    if [ -n "$TMP_XDC" ]; then
+        rm -f "$TMP_XDC"
+    fi
+}
+trap cleanup EXIT
+
+if [ -n "$PREPACK" ]; then
+    TMP_XDC=$(mktemp /tmp/pipelinec-himbaechel-clock-XXXXXX.xdc)
+    if [ -n "$XDC" ]; then
+        cat "$XDC" >> "$TMP_XDC"
+        printf '\n' >> "$TMP_XDC"
+    fi
+    python3 - "$PREPACK" "$TMP_XDC" <<'PY'
+import ast
+import math
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+out = Path(sys.argv[2])
+tree = ast.parse(src.read_text(), filename=str(src))
+lines = []
+for node in tree.body:
+    if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+        raise SystemExit(f"unsupported PipelineC pre-pack statement: {ast.dump(node)}")
+    call = node.value
+    fn = call.func
+    if not (
+        isinstance(fn, ast.Attribute)
+        and isinstance(fn.value, ast.Name)
+        and fn.value.id == "ctx"
+        and fn.attr == "addClock"
+    ):
+        raise SystemExit(f"unsupported PipelineC pre-pack call: {ast.dump(call)}")
+    if len(call.args) != 2 or call.keywords:
+        raise SystemExit("ctx.addClock must have exactly two positional arguments")
+    name = ast.literal_eval(call.args[0])
+    raw_mhz = ast.literal_eval(call.args[1])
+    if not isinstance(name, str) or not name:
+        raise SystemExit("invalid ctx.addClock clock name")
+    if isinstance(raw_mhz, bool) or not isinstance(raw_mhz, (int, float)):
+        raise SystemExit("ctx.addClock frequency must be a numeric literal")
+    mhz = float(raw_mhz)
+    if not math.isfinite(mhz) or mhz <= 0:
+        raise SystemExit("ctx.addClock frequency must be finite and positive")
+    if any(c in name for c in "{}\n\r\x00"):
+        raise SystemExit(f"unsupported clock net name: {name!r}")
+    period = 1000.0 / mhz
+    lines.append(f"create_clock -period {period:.12g} [get_nets {{{name}}}]")
+
+with out.open("a") as f:
+    for line in lines:
+        f.write(line + "\n")
+
+print("compat shim: translated clock constraints:", file=sys.stderr)
+for line in lines:
+    print("  " + line, file=sys.stderr)
+PY
+    XDC="$TMP_XDC"
+fi
+
+if [ -n "$XDC" ]; then
+    ARGS+=(-o "xdc=$XDC")
+fi
+if [ -n "$FASM" ]; then
+    ARGS+=(-o "fasm=$FASM")
+fi
+
+# Do not exec: returning through this shell guarantees the EXIT trap removes a
+# translated temporary XDC on both successful and failing backend invocations.
+"$REAL" "${ARGS[@]}"

@@ -2,7 +2,7 @@
   description = "Pinned minimal PipelineC + OpenXC7 synthesis environment";
 
   inputs = {
-    openxc7.url = "github:openXC7/toolchain-nix/860ee576fbf8f29cc893561624d1e1aa044bc2e8";
+    openxc7.url = "github:openXC7/toolchain-nix/9ab9e2d7f549e6665ccd2a3a94f75f1dafacf29f";
     nixpkgs.follows = "openxc7/nixpkgs";
   };
 
@@ -16,6 +16,31 @@
           pkgs = import nixpkgs { inherit system; };
           tc = openxc7.packages.${system};
           py = pkgs.python312Packages;
+
+          # Carry the two openXC7 fixes validated by fpgatool until the pinned
+          # toolchain-nix nextpnr revision contains them upstream.
+          nextpnrPatched = tc.nextpnr.overrideAttrs (old: {
+            patches = (old.patches or [ ]) ++ [
+              ./patches/openxc7-xdc-pullup-normalization.patch
+              ./patches/openxc7-mmcm-fasm-with-tests.patch
+            ];
+          });
+
+          # PipelineC still emits nextpnr's legacy --pre-pack clocks.py hook.
+          # Himbächel is built without Python hooks, so use a deliberately narrow
+          # compatibility front-end that translates literal ctx.addClock calls
+          # to native XDC create_clock constraints.
+          nextpnrCompat = pkgs.runCommand "fpgatool-nextpnr-xilinx-compat" {
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+          } ''
+            mkdir -p $out/bin
+            cp ${./compat/nextpnr-xilinx} $out/bin/nextpnr-xilinx
+            chmod +x $out/bin/nextpnr-xilinx
+            substituteInPlace $out/bin/nextpnr-xilinx \
+              --replace-fail '__FPGATOOL_REAL_NEXTPNR_HIMBAECHEL__' '${nextpnrPatched}/bin/nextpnr-himbaechel'
+            wrapProgram $out/bin/nextpnr-xilinx \
+              --prefix PATH : ${nixpkgs.lib.makeBinPath [ pkgs.bash pkgs.python312 pkgs.coreutils ]}
+          '';
 
           # OpenXC7's FASM package builds the optional native ANTLR parser,
           # whose toolchain pulls Bazel into a cold build. FASM explicitly
@@ -48,34 +73,39 @@
             doCheck = false;
           };
 
+          # Basys 3 uses the xc7a35t device alias, which shares the xc7a50t
+          # Himbächel database.  Generate only that die instead of the complete
+          # Artix-7 family (xc7a50t/100t/200t), while using the exact same
+          # patched nextpnr generator as place-and-route.  This preserves the
+          # external FPGA_TOOL_CHIPDB_DIR/xc7a35tcpg236.bin contract without
+          # carrying the archived bbaexport flow or building unrelated dies.
           basys3Chipdb = pkgs.stdenv.mkDerivation {
-            pname = "fpgatool-basys3-chipdb";
-            version = "0.9.5";
-            src = "${tc.nextpnr-xilinx}/share/nextpnr/external/prjxray-db";
+            pname = "fpgatool-basys3-himbaechel-chipdb";
+            version = nextpnrPatched.version;
             dontUnpack = true;
-            buildInputs = [
-              tc.prjxray
-              tc.nextpnr-xilinx
-              pkgs.pypy310
-              pkgs.coreutils
-              pkgs.findutils
-              pkgs.gnused
-              pkgs.gnugrep
-            ];
+            nativeBuildInputs = [ pkgs.python3 ];
+            buildInputs = [ nextpnrPatched ];
             buildPhase = ''
               runHook preBuild
               mkdir -p "$out"
-              pypy3.10 ${tc.nextpnr-xilinx}/share/nextpnr/python/bbaexport.py \
-                --device xc7a35tcpg236-1 \
-                --bba "$TMPDIR/xc7a35tcpg236.bba"
-              bbasm -l "$TMPDIR/xc7a35tcpg236.bba" "$out/xc7a35tcpg236.bin"
-              rm -f "$TMPDIR/xc7a35tcpg236.bba"
+              ${pkgs.python3}/bin/python3 \
+                ${nextpnrPatched}/share/nextpnr/himbaechel/uarch/xilinx/gen/xilinx_gen.py \
+                --xray "${nextpnrPatched}/share/nextpnr/external/prjxray-db/artix7" \
+                --device xc7a50t \
+                --bba "$TMPDIR/xc7a50t.bba"
+              ${nextpnrPatched}/bin/bbasm -l \
+                "$TMPDIR/xc7a50t.bba" \
+                "$out/chipdb-xc7a50t.bin"
+              ln -s chipdb-xc7a50t.bin "$out/xc7a35tcpg236.bin"
+              rm -f "$TMPDIR/xc7a50t.bba"
               runHook postBuild
             '';
             dontInstall = true;
           };
         in {
           fasm-lite = fasmLite;
+          nextpnr-patched = nextpnrPatched;
+          nextpnr-compat = nextpnrCompat;
           basys3-chipdb = basys3Chipdb;
           default = basys3Chipdb;
         });
@@ -84,6 +114,8 @@
         let
           pkgs = import nixpkgs { inherit system; };
           tc = openxc7.packages.${system};
+          nextpnrPatched = self.packages.${system}.nextpnr-patched;
+          nextpnrCompat = self.packages.${system}.nextpnr-compat;
           fasmLite = self.packages.${system}.fasm-lite;
           chipdb = self.packages.${system}.basys3-chipdb;
           py = pkgs.python312Packages;
@@ -107,7 +139,7 @@
           default = pkgs.mkShell {
             packages = [
               fasmLite
-              tc.nextpnr-xilinx
+              nextpnrCompat
               tc.prjxray
               pkgs.yosys
               pkgs.ghdl
@@ -121,9 +153,9 @@
               chipdb
             ];
             shellHook = ''
-              export NEXTPNR_XILINX_DIR=${tc.nextpnr-xilinx}
-              export NEXTPNR_XILINX_PYTHON_DIR=${tc.nextpnr-xilinx}/share/nextpnr/python/
-              export PRJXRAY_DB_DIR=${tc.nextpnr-xilinx}/share/nextpnr/external/prjxray-db
+              export NEXTPNR_XILINX_DIR=${nextpnrCompat}
+              export NEXTPNR_XILINX_PYTHON_DIR=${nextpnrPatched}/share/nextpnr
+              export PRJXRAY_DB_DIR=${nextpnrPatched}/share/nextpnr/external/prjxray-db
               export PRJXRAY_PYTHON_DIR=${tc.prjxray}/usr/share/python3/
               export PYTHONPATH="${openxc7PythonPath}''${PYTHONPATH:+:$PYTHONPATH}"
               export PYPY3=${pkgs.pypy310}/bin/pypy3.10

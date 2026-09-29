@@ -152,3 +152,22 @@ set_property LOC P19 [get_ports VGA_HS]
 set_property IOSTANDARD LVCMOS33 [get_ports VGA_HS]
 set_property LOC R19 [get_ports VGA_VS]
 set_property IOSTANDARD LVCMOS33 [get_ports VGA_VS]
+
+# 32-Mbit QSPI configuration flash. CCLK is a dedicated configuration pin and
+# is driven from user logic through STARTUPE2, so there is intentionally no
+# ordinary top-level clock pin constraint here.
+set_property LOC D18 [get_ports QspiDQ0]
+set_property IOSTANDARD LVCMOS33 [get_ports QspiDQ0]
+set_property LOC D19 [get_ports QspiDQ1]
+set_property IOSTANDARD LVCMOS33 [get_ports QspiDQ1]
+# The configuration flash releases DQ1 between transactions. Keep SO at a
+# defined idle level. fpgatool carries the OpenXC7 XDC pull-normalization fix,
+# so the normal Himbächel result is native PULLTYPE.PULLUP. The build wrapper
+# retains a presence-aware FASM fallback for older backends.
+set_property PULLUP true [get_ports QspiDQ1]
+set_property LOC G18 [get_ports QspiDQ2]
+set_property IOSTANDARD LVCMOS33 [get_ports QspiDQ2]
+set_property LOC F18 [get_ports QspiDQ3]
+set_property IOSTANDARD LVCMOS33 [get_ports QspiDQ3]
+set_property LOC K19 [get_ports QspiCSn]
+set_property IOSTANDARD LVCMOS33 [get_ports QspiCSn]

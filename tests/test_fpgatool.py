@@ -191,6 +191,107 @@ class FPGAToolTests(unittest.TestCase):
         self.assertNotIn("\n    clk_release = 1\n", ps2)
         self.assertNotIn("\n    data_release = 1\n", ps2)
 
+    def test_basys3_qspi_uses_internal_startupe2_for_cclk(self):
+        qspi = (ROOT / "examples" / "fpgatool_board" / "basys3" / "qspi.py").read_text()
+        self.assertIn("STARTUPE2", qspi)
+        self.assertIn("USRCCLKO => cclk(0)", qspi)
+        self.assertIn(
+            "def drive_clock_and_cs(cclk: uint1_t, cs_n: uint1_t, cclk_ts: uint1_t) -> uint1_t",
+            qspi,
+        )
+        self.assertIn("USRCCLKTS => cclk_ts(0)", qspi)
+        self.assertNotIn("USRCCLKTS => '0'", qspi)
+        self.assertIn("vhdl(_STARTUPE2_VHDL)", qspi)
+        self.assertIn("@sim_model(drive_clock_and_cs)", qspi)
+        self.assertIn("return cs_n", qspi)
+        self.assertNotIn("QSPI_CCLK: Output", qspi)
+        self.assertNotIn("@final", qspi)
+        demo = (ROOT / "examples" / "qspi_flash_id.py").read_text()
+        self.assertIn(
+            "board_qspi.QspiCSn = board_qspi.drive_clock_and_cs(",
+            demo,
+        )
+        pins = (ROOT / "boards" / "basys3" / "pins.xdc").read_text()
+        self.assertIn("LOC D18 [get_ports QspiDQ0]", pins)
+        self.assertIn("LOC D19 [get_ports QspiDQ1]", pins)
+        self.assertIn("LOC G18 [get_ports QspiDQ2]", pins)
+        self.assertIn("LOC F18 [get_ports QspiDQ3]", pins)
+        self.assertIn("LOC K19 [get_ports QspiCSn]", pins)
+        self.assertNotIn("get_ports QSPI_CCLK", pins)
+        self.assertIn("set_property PULLUP true [get_ports QspiDQ1]", pins)
+        build_script = (ROOT / "toolchain" / "build-pipelinec.sh").read_text()
+        self.assertIn("LIOB33_X0Y47.IOB_Y1.PULLTYPE.NONE", build_script)
+        self.assertIn("LIOB33_X0Y47.IOB_Y1.PULLTYPE.PULLUP", build_script)
+        self.assertIn("fasm2frames", build_script)
+        self.assertIn("xc7frames2bit", build_script)
+        self.assertIn('final_json="$final_top_dir/top.json"', build_script)
+        self.assertIn('"QspiDQ1" in top.get("ports", {})', build_script)
+        self.assertIn('if [ "$dq1_in_design" -eq 1 ]; then', build_script)
+        self.assertIn("Modern Himbächel with XDC pull normalization", build_script)
+
+    def test_qspi_flash_demo_is_read_only_jedec_id(self):
+        hw = (ROOT / "examples" / "hardware" / "qspi_flash.py").read_text()
+        self.assertIn("159  # 0x9F, Read JEDEC ID", hw)
+        self.assertIn("_STARTUP_PRIME_CYCLES = 8", hw)
+        self.assertIn("_ST_PRIME", hw)
+        self.assertIn("tx_shift = 102  # 0x66, Reset Enable.", hw)
+        self.assertIn("tx_shift = 153  # 0x99, Reset.", hw)
+        self.assertIn("tx_shift = 171  # 0xAB, Release from Deep Power-Down.", hw)
+        self.assertIn("_RES_CYCLES = 10_000", hw)
+        self.assertNotIn("0x02", hw)
+        self.assertNotIn("0x20", hw)
+        self.assertNotIn("0xD8", hw)
+        demo = (ROOT / "examples" / "qspi_flash_id.py").read_text()
+        self.assertIn("read_jedec_id", demo)
+        self.assertIn("manufacturer_id", demo)
+        self.assertIn("memory_type", demo)
+        self.assertIn("capacity", demo)
+
+    def test_qspi_flash_rw_demo_uses_reserved_tail_block(self):
+        hw = (ROOT / "examples" / "hardware" / "qspi_flash_rw.py").read_text()
+        self.assertIn("_USER_BLOCK_ADDRESS = 0x3F0000", hw)
+        self.assertIn("_READ_USER_COMMAND = ((0x03 << 24) | _USER_BLOCK_ADDRESS) << 32", hw)
+        self.assertIn("_ERASE_USER_COMMAND = ((0xD8 << 24) | _USER_BLOCK_ADDRESS) << 32", hw)
+        self.assertIn("_PROGRAM_USER_COMMAND = ((0x02 << 24) | _USER_BLOCK_ADDRESS) << 32", hw)
+        self.assertIn("_WREN_COMMAND = 0x0600000000000000", hw)
+        self.assertIn("_RDSR_COMMAND = 0x0500000000000000", hw)
+        self.assertIn("bcd_valid", hw)
+        self.assertIn("_CS_HIGH_CYCLES = 10", hw)
+        self.assertIn("_ST_BUS_CS_HIGH = 17", hw)
+        self.assertIn("state = _ST_BUS_CS_HIGH", hw)
+        self.assertIn("_STARTUP_PRIME_CYCLES = 8", hw)
+        self.assertIn("_RECOVERY_CS_HIGH_CYCLES = 20", hw)
+        self.assertIn("_RES_CYCLES = 10_000", hw)
+        self.assertIn("_ST_PRIME = 18", hw)
+        self.assertIn("_ST_WAKE_FF = 19", hw)
+        self.assertIn("_ST_WAKE_GAP = 20", hw)
+        self.assertIn("_ST_WAKE_CMD = 21", hw)
+        self.assertIn("_ST_WAKE_RES_WAIT = 22", hw)
+        self.assertIn("wake_shift = 102  # 0x66, Reset Enable.", hw)
+        self.assertIn("wake_shift = 153  # 0x99, Reset.", hw)
+        self.assertIn("wake_shift = 171  # 0xAB, Release from Deep Power-Down.", hw)
+        self.assertIn("elif state == _ST_BUS_CS_HIGH:", hw)
+        self.assertNotIn("else:  # _ST_BUS_CS_HIGH", hw)
+        self.assertNotIn("0xC7", hw)
+        demo = (ROOT / "examples" / "qspi_flash_rw.py").read_text()
+        self.assertIn("board_buttons.BTNU", demo)
+        self.assertIn("board_buttons.BTND", demo)
+        self.assertIn("board_buttons.BTNC", demo)
+        self.assertIn("persistent_bcd_store", demo)
+        self.assertIn("drive_clock_and_cs", demo)
+
+    def test_container_nix_develop_uses_path_flake_for_dirty_worktrees(self):
+        source = (ROOT / "fpgatool.py").read_text()
+        self.assertEqual(
+            source.count('"develop", "path:/workspace/toolchain",'),
+            2,
+        )
+        self.assertNotIn('"develop", "/workspace/toolchain",', source)
+        self.assertIn(
+            '"--command", "bash", "/workspace/toolchain/build-pipelinec.sh",',
+            source,
+        )
+
     def test_default_bitstream_is_stable(self):
         source = (fpgatool.ROOT / "examples" / "blink.py").resolve()
         self.assertEqual(

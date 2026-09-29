@@ -4,7 +4,7 @@ rev = "b5a81c92f22ae613ffb1bfcad30db7410922f2c7"
 
 [openxc7]
 repo = "https://github.com/openXC7/toolchain-nix.git"
-rev = "860ee576fbf8f29cc893561624d1e1aa044bc2e8"
+rev = "9ab9e2d7f549e6665ccd2a3a94f75f1dafacf29f"
 
 [container]
 nix_image = "docker.io/nixos/nix@sha256:7a007c766426c1877758ddc5cb87a965ac131fc78c582ce0083d922d51ae945c"

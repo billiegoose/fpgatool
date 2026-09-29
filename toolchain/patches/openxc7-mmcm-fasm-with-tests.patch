@@ -1,0 +1,219 @@
+diff --git a/himbaechel/uarch/xilinx/CMakeLists.txt b/himbaechel/uarch/xilinx/CMakeLists.txt
+index 3d964530..dd9a4afe 100644
+--- a/himbaechel/uarch/xilinx/CMakeLists.txt
++++ b/himbaechel/uarch/xilinx/CMakeLists.txt
+@@ -23,6 +23,7 @@ set(SOURCES
+ 
+ set(TEST_SOURCES
+     tests/bel_bucket_test.cc
++    tests/fasm_test.cc
+     tests/pack_test.cc
+ )
+ 
+diff --git a/himbaechel/uarch/xilinx/fasm.cc b/himbaechel/uarch/xilinx/fasm.cc
+index cf4324f9..51754db1 100644
+--- a/himbaechel/uarch/xilinx/fasm.cc
++++ b/himbaechel/uarch/xilinx/fasm.cc
+@@ -2541,6 +2541,16 @@ struct FasmBackend
+                 write_bit(name + "_CLKOUT2_FRAC_WF_R[0]", 1);
+                 write_int_vector(name + "_CLKOUT2_FRAC[2:0]", frac, 3);
+             }
++        } else {
++            // Match Vivado's default programming for unused MMCM counters:
++            // divide-by-1 with NO_COUNT set, rather than leaving the counter
++            // configuration all-zero.
++            auto is_clkout_5_or_6 = name == "CLKOUT5" || name == "CLKOUT6";
++            write_int_vector(name + "_CLKOUT1_HIGH_TIME[5:0]", 1, 6);
++            write_int_vector(name + "_CLKOUT1_LOW_TIME[5:0]", 1, 6);
++            auto no_count_feature =
++                    name + (is_clkout_5_or_6 ? "_CLKOUT2_FRACTIONAL_NO_COUNT[0]" : "_CLKOUT2_NO_COUNT[0]");
++            write_bit(no_count_feature, true);
+         }
+     }
+ 
+@@ -2582,10 +2592,11 @@ struct FasmBackend
+         pop();
+ 
+         auto clkfbout_mult = (int)float_or_default(ci, "CLKFBOUT_MULT_F", 5.000);
+-        if (63 < clkfbout_mult)
+-            log_error("MMCME2_ADV: CLKFBOUT_MULT_F must not be greater than 63");
+-        if (0 == clkfbout_mult)
+-            log_error("MMCME2_ADV: CLKFBOUT_MULT_F must not be 0");
++        // The lock/filter tables have entries for multipliers 1 through 64.
++        // Check both ends before indexing so invalid negative or >64 values
++        // cannot turn into host-dependent out-of-bounds accesses.
++        if (clkfbout_mult < 1 || clkfbout_mult > 64)
++            log_error("MMCME2_ADV: CLKFBOUT_MULT_F must be in the range 1..64 (got %d)\n", clkfbout_mult);
+         write_int_vector("LKTABLE[39:0]", Xc7MMCM::lk_table[clkfbout_mult - 1], 40);
+ 
+         std::string bandwidth = str_or_default(ci->params, id_BANDWIDTH, "OPTIMIZED");
+@@ -2598,14 +2609,16 @@ struct FasmBackend
+             filter_lookup = Xc7MMCM::filter_lookup_high;
+         else
+             filter_lookup = Xc7MMCM::filter_lookup_optimized;
+-        write_int_vector("FILTREG1_RESERVED[11:0]", filter_lookup[clkfbout_mult - 1], 12);
++        // Vivado golden bitstreams put the XAPP888-derived loop-filter
++        // lookup value in TABLE; FILTREG1_RESERVED is the constant 0x8.
++        write_int_vector("FILTREG1_RESERVED[11:0]", 0x8, 12);
+ 
+-        // 0x9900 enables fractional counters
+-        // only int counters would be 0x1 << 8
+-        // 0xffff enables everything, I suppose, this is what is used in xap888
+-        write_int_vector("POWER_REG_POWER_REG_POWER_REG[15:0]", 0xffff, 16);
++        // Vivado programs POWER_REG=0x100 for these MMCM configurations.
++        // The old 0xffff value is XAPP888's "enable everything" setting and
++        // does not match Vivado's emitted configuration.
++        write_int_vector("POWER_REG_POWER_REG_POWER_REG[15:0]", 0x100, 16);
+         write_bit("LOCKREG3_RESERVED[0]");
+-        write_int_vector("TABLE[9:0]", 0x3d4, 10);
++        write_int_vector("TABLE[9:0]", filter_lookup[clkfbout_mult - 1], 10);
+         pop(2);
+     }
+     void write_dsp_cell(CellInfo *ci)
+diff --git a/himbaechel/uarch/xilinx/tests/fasm_test.cc b/himbaechel/uarch/xilinx/tests/fasm_test.cc
+new file mode 100644
+index 00000000..17db2edc
+--- /dev/null
++++ b/himbaechel/uarch/xilinx/tests/fasm_test.cc
+@@ -0,0 +1,141 @@
++/*
++ *  nextpnr -- Next Generation Place and Route
++ *
++ *  Copyright (C) 2026  nextpnr contributors
++ *
++ *  Permission to use, copy, modify, and/or distribute this software for any
++ *  purpose with or without fee is hereby granted, provided that the above
++ *  copyright notice and this permission notice appear in all copies.
++ *
++ *  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
++ *  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
++ *  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
++ *  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++ *  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
++ *  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
++ *  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
++ */
++
++#include <filesystem>
++#include <fstream>
++#include <sstream>
++#include <string>
++
++#include "command.h"
++#include "gtest/gtest.h"
++#include "nextpnr.h"
++#include "uarch/xilinx/xilinx.h"
++#define HIMBAECHEL_CONSTIDS "uarch/xilinx/constids.inc"
++#include "himbaechel_constids.h"
++
++USING_NEXTPNR_NAMESPACE
++
++class XilinxFasmTest : public ::testing::Test
++{
++  protected:
++    void SetUp() override
++    {
++        init_share_dirname();
++        chip_args.device = "xc7a50tcsg324-1";
++        ctx = new Context(chip_args);
++        ctx->uarch->init(ctx);
++        ctx->late_init();
++        xil = reinterpret_cast<XilinxImpl *>(ctx->uarch.get());
++
++        fasm_path = std::filesystem::temp_directory_path() / "nextpnr-xilinx-mmcm-fasm-test.fasm";
++        std::error_code ec;
++        std::filesystem::remove(fasm_path, ec);
++    }
++
++    void TearDown() override
++    {
++        std::error_code ec;
++        std::filesystem::remove(fasm_path, ec);
++        delete ctx;
++    }
++
++    CellInfo *create_placed_mmcm()
++    {
++        CellInfo *ci = ctx->createCell(ctx->id("mmcm"), id_MMCME2_ADV_MMCME2_ADV);
++        BelId target;
++        for (BelId bel : ctx->getBels()) {
++            if (ctx->getBelBucketForBel(bel) == id_MMCME2_ADV) {
++                target = bel;
++                break;
++            }
++        }
++        EXPECT_NE(target, BelId());
++        if (target != BelId())
++            ctx->bindBel(target, ci, STRENGTH_LOCKED);
++        return ci;
++    }
++
++    std::string emit_fasm()
++    {
++        xil->write_fasm(fasm_path.string());
++        std::ifstream f(fasm_path);
++        EXPECT_TRUE(f.good());
++        std::ostringstream ss;
++        ss << f.rdbuf();
++        return ss.str();
++    }
++
++    static void expect_contains(const std::string &text, const std::string &needle)
++    {
++        EXPECT_NE(text.find(needle), std::string::npos) << "missing FASM feature: " << needle;
++    }
++
++    ArchArgs chip_args;
++    Context *ctx = nullptr;
++    XilinxImpl *xil = nullptr;
++    std::filesystem::path fasm_path;
++};
++
++TEST_F(XilinxFasmTest, mmcm_programs_vivado_filter_power_and_unused_counter_defaults)
++{
++    CellInfo *mmcm = create_placed_mmcm();
++    mmcm->params[ctx->id("CLKFBOUT_MULT_F")] = Property("5.000000");
++    mmcm->params[id_BANDWIDTH] = Property("OPTIMIZED");
++
++    const std::string fasm = emit_fasm();
++
++    // Vivado goldens put the loop-filter lookup in TABLE, leave
++    // FILTREG1_RESERVED at 0x8, and program POWER_REG as 0x100.
++    expect_contains(fasm, "MMCME2_ADV.FILTREG1_RESERVED[11:0] = 12'b000000001000");
++    expect_contains(fasm, "MMCME2_ADV.POWER_REG_POWER_REG_POWER_REG[15:0] = 16'b0000000100000000");
++    expect_contains(fasm, "MMCME2_ADV.TABLE[9:0] = 10'b1101011100"); // optimized MULT=5 -> 0x35c
++
++    // Unused MMCM outputs are still programmed as divide-by-1 counters with
++    // NO_COUNT set; leaving these fields all-zero does not match Vivado.
++    expect_contains(fasm, "MMCME2_ADV.CLKOUT1_CLKOUT1_HIGH_TIME[5:0] = 6'b000001");
++    expect_contains(fasm, "MMCME2_ADV.CLKOUT1_CLKOUT1_LOW_TIME[5:0] = 6'b000001");
++    expect_contains(fasm, "MMCME2_ADV.CLKOUT1_CLKOUT2_NO_COUNT[0]");
++    expect_contains(fasm, "MMCME2_ADV.CLKOUT5_CLKOUT2_FRACTIONAL_NO_COUNT[0]");
++    expect_contains(fasm, "MMCME2_ADV.CLKOUT6_CLKOUT2_FRACTIONAL_NO_COUNT[0]");
++}
++
++TEST_F(XilinxFasmTest, mmcm_filter_table_tracks_bandwidth_and_multiplier)
++{
++    CellInfo *mmcm = create_placed_mmcm();
++    mmcm->params[ctx->id("CLKFBOUT_MULT_F")] = Property("8.000000");
++    mmcm->params[id_BANDWIDTH] = Property("LOW");
++
++    const std::string fasm = emit_fasm();
++    expect_contains(fasm, "MMCME2_ADV.FILTREG1_RESERVED[11:0] = 12'b000000001000");
++    expect_contains(fasm, "MMCME2_ADV.POWER_REG_POWER_REG_POWER_REG[15:0] = 16'b0000000100000000");
++    expect_contains(fasm, "MMCME2_ADV.TABLE[9:0] = 10'b0010001100"); // LOW MULT=8 -> 0x08c
++}
++
++TEST_F(XilinxFasmTest, mmcm_multiplier_accepts_full_table_range_and_rejects_out_of_range)
++{
++    CellInfo *mmcm = create_placed_mmcm();
++    mmcm->params[id_BANDWIDTH] = Property("OPTIMIZED");
++
++    mmcm->params[ctx->id("CLKFBOUT_MULT_F")] = Property("64.000000");
++    EXPECT_NO_THROW(emit_fasm());
++
++    for (const char *invalid : {"0.000000", "-1.000000", "65.000000"}) {
++        mmcm->params[ctx->id("CLKFBOUT_MULT_F")] = Property(invalid);
++        EXPECT_THROW(emit_fasm(), log_execution_error_exception);
++    }
++}

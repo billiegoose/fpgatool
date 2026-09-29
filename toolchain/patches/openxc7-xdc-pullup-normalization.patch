@@ -1,0 +1,147 @@
+diff --git a/himbaechel/uarch/xilinx/tests/pack_test.cc b/himbaechel/uarch/xilinx/tests/pack_test.cc
+index abf8cfdc..08df4e46 100644
+--- a/himbaechel/uarch/xilinx/tests/pack_test.cc
++++ b/himbaechel/uarch/xilinx/tests/pack_test.cc
+@@ -17,6 +17,9 @@
+  *
+  */
+ 
++#include <chrono>
++#include <filesystem>
++#include <fstream>
+ #include <vector>
+ #include "command.h"
+ #include "gtest/gtest.h"
+@@ -48,6 +51,92 @@ class XilinxPackTest : public ::testing::Test
+     XilinxImpl *xil;
+ };
+ 
++TEST_F(XilinxPackTest, xdc_pullup_pulldown_normalization)
++{
++    CellInfo *up = ctx->createCell(ctx->id("pull_up"), id_PAD);
++    CellInfo *down = ctx->createCell(ctx->id("pull_down"), id_PAD);
++    CellInfo *off = ctx->createCell(ctx->id("pull_off"), id_PAD);
++    CellInfo *keep_down = ctx->createCell(ctx->id("keep_down"), id_PAD);
++    CellInfo *keep_up = ctx->createCell(ctx->id("keep_up"), id_PAD);
++    CellInfo *dict_up = ctx->createCell(ctx->id("dict_up"), id_PAD);
++    up->attrs[id_PULLTYPE] = std::string("NONE");
++    down->attrs[id_PULLTYPE] = std::string("NONE");
++    off->attrs[id_PULLTYPE] = std::string("PULLUP");
++    keep_down->attrs[id_PULLTYPE] = std::string("PULLDOWN");
++    keep_up->attrs[id_PULLTYPE] = std::string("PULLUP");
++    dict_up->attrs[id_PULLTYPE] = std::string("NONE");
++
++    const auto unique_suffix = std::chrono::steady_clock::now().time_since_epoch().count();
++    const auto filename = std::filesystem::temp_directory_path() /
++                          ("nextpnr-xilinx-pull-properties-" + std::to_string(unique_suffix) + ".xdc");
++    {
++        std::ofstream xdc(filename);
++        ASSERT_TRUE(xdc.good());
++        xdc << "set_property PULLUP True [get_ports pull_up]\n";
++        xdc << "set_property PULLDOWN 1 [get_ports pull_down]\n";
++        xdc << "set_property PULLUP 0 [get_ports pull_off]\n";
++        xdc << "set_property PULLUP false [get_ports keep_down]\n";
++        xdc << "set_property PULLDOWN FALSE [get_ports keep_up]\n";
++        xdc << "set_property -dict { PULLUP true } [get_ports dict_up]\n";
++    }
++
++    xil->parse_xdc(filename.string());
++    std::filesystem::remove(filename);
++
++    EXPECT_EQ(str_or_default(up->attrs, id_PULLTYPE), "PULLUP");
++    EXPECT_EQ(str_or_default(down->attrs, id_PULLTYPE), "PULLDOWN");
++    EXPECT_EQ(str_or_default(off->attrs, id_PULLTYPE), "NONE");
++    EXPECT_EQ(str_or_default(keep_down->attrs, id_PULLTYPE), "PULLDOWN");
++    EXPECT_EQ(str_or_default(keep_up->attrs, id_PULLTYPE), "PULLUP");
++    EXPECT_EQ(str_or_default(dict_up->attrs, id_PULLTYPE), "PULLUP");
++
++    // Disabling one pull direction must not clear an already-selected opposite pull.
++    EXPECT_EQ(str_or_default(keep_down->attrs, ctx->id("PULLUP")), "false");
++    EXPECT_EQ(str_or_default(keep_up->attrs, ctx->id("PULLDOWN")), "FALSE");
++
++    // Preserve the literal XDC attributes too; apart from feeding diagnostics,
++    // this keeps the parser's normal duplicate-property detection effective.
++    EXPECT_EQ(str_or_default(up->attrs, ctx->id("PULLUP")), "True");
++    EXPECT_EQ(str_or_default(down->attrs, ctx->id("PULLDOWN")), "1");
++    EXPECT_EQ(str_or_default(off->attrs, ctx->id("PULLUP")), "0");
++    EXPECT_EQ(str_or_default(dict_up->attrs, ctx->id("PULLUP")), "true");
++}
++
++TEST_F(XilinxPackTest, xdc_rejects_conflicting_pull_properties)
++{
++    ctx->createCell(ctx->id("pull"), id_PAD);
++
++    const auto unique_suffix = std::chrono::steady_clock::now().time_since_epoch().count();
++    const auto filename = std::filesystem::temp_directory_path() /
++                          ("nextpnr-xilinx-conflicting-pulls-" + std::to_string(unique_suffix) + ".xdc");
++    {
++        std::ofstream xdc(filename);
++        ASSERT_TRUE(xdc.good());
++        xdc << "set_property PULLUP true [get_ports pull]\n";
++        xdc << "set_property PULLDOWN true [get_ports pull]\n";
++    }
++
++    EXPECT_THROW(xil->parse_xdc(filename.string()), log_execution_error_exception);
++    std::filesystem::remove(filename);
++}
++
++TEST_F(XilinxPackTest, xdc_rejects_invalid_pull_property_value)
++{
++    ctx->createCell(ctx->id("pull"), id_PAD);
++
++    const auto unique_suffix = std::chrono::steady_clock::now().time_since_epoch().count();
++    const auto filename = std::filesystem::temp_directory_path() /
++                          ("nextpnr-xilinx-invalid-pull-" + std::to_string(unique_suffix) + ".xdc");
++    {
++        std::ofstream xdc(filename);
++        ASSERT_TRUE(xdc.good());
++        xdc << "set_property PULLUP maybe [get_ports pull]\n";
++    }
++
++    EXPECT_THROW(xil->parse_xdc(filename.string()), log_execution_error_exception);
++    std::filesystem::remove(filename);
++}
++
+ TEST_F(XilinxPackTest, pack_cfg_startupe2)
+ {
+     // STARTUPE2 must pack to STARTUP_STARTUP and preplace to its single
+diff --git a/himbaechel/uarch/xilinx/xdc.cc b/himbaechel/uarch/xilinx/xdc.cc
+index 6a59c04d..ee16f67e 100644
+--- a/himbaechel/uarch/xilinx/xdc.cc
++++ b/himbaechel/uarch/xilinx/xdc.cc
+@@ -273,7 +273,35 @@ void XilinxImpl::parse_xdc(const std::string &filename)
+                                            pair.first.c_str(), c->name.c_str(ctx), lineno);
+                         num_errors++;
+                     }
++                    // Keep the XDC property itself, as for every other property above,
++                    // then derive the internal attribute consumed by the FASM writer.
++                    // Retaining PULLUP/PULLDOWN also preserves duplicate-property
++                    // detection if the same constraint appears again later in the file.
+                     c->attrs[id_prop] = std::string(pair.second);
++                    if (pair.first == "PULLUP" || pair.first == "PULLDOWN") {
++                        std::string value = pair.second;
++                        boost::algorithm::to_upper(value);
++                        bool valid_value = value == "TRUE" || value == "FALSE" || value == "1" || value == "0";
++                        if (!valid_value) {
++                            log_nonfatal_error(
++                                    "property '%s' for cell '%s' must be TRUE, FALSE, 1, or 0, not '%s' (on line %d)\n",
++                                    pair.first.c_str(), c->name.c_str(ctx), pair.second.c_str(), lineno);
++                            num_errors++;
++                        } else if (value == "TRUE" || value == "1") {
++                            bool conflicting_pull = c->attrs.count(id_PULLTYPE) &&
++                                                    c->attrs.at(id_PULLTYPE).as_string() != "NONE" &&
++                                                    c->attrs.at(id_PULLTYPE).as_string() != pair.first;
++                            if (conflicting_pull) {
++                                log_nonfatal_error(
++                                        "conflicting PULLUP/PULLDOWN properties for cell '%s' (on line %d)\n",
++                                        c->name.c_str(ctx), lineno);
++                                num_errors++;
++                            }
++                            c->attrs[id_PULLTYPE] = std::string(pair.first);
++                        } else if (c->attrs.count(id_PULLTYPE) && c->attrs.at(id_PULLTYPE).as_string() == pair.first) {
++                            c->attrs[id_PULLTYPE] = std::string("NONE");
++                        }
++                    }
+                     if (pair.first == "PACKAGE_PIN")
+                         c->attrs[id_LOC] = std::string(pair.second);
+                 }

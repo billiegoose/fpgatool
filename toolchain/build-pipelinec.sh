@@ -57,3 +57,57 @@ pipelinec_args+=(
 )
 
 "$FPGA_TOOL_PIPELINEC_PYTHON" "$pipelinec_dir/src/pipelinec" "${pipelinec_args[@]}"
+
+# OpenXC7 compatibility workaround for the Basys 3 configuration-flash SO pin.
+# Legacy nextpnr-xilinx accepts the XDC PULLUP constraint but can emit
+# PULLTYPE.NONE for QspiDQ1 (D19 / IOB_X0Y47.Y1).  Only inspect/patch that
+# feature when the synthesized board-facing design actually contains QspiDQ1;
+# the Basys 3 board XDC also names pins unused by ordinary designs such as blink.
+# Modern Himbächel with XDC pull normalization emits PULLTYPE.PULLUP directly,
+# in which case this compatibility block is intentionally a no-op.
+final_top_dir="$out_dir/pipelinec/top"
+final_fasm="$final_top_dir/top.fasm"
+final_json="$final_top_dir/top.json"
+dq1_in_design=0
+if grep -Fq 'set_property PULLUP true [get_ports QspiDQ1]' "$constraints" \
+    && [ -f "$final_fasm" ]; then
+  [ -f "$final_json" ] || { echo "final Yosys JSON missing while checking Basys 3 QspiDQ1 workaround" >&2; exit 1; }
+  dq1_in_design=$("$FPGA_TOOL_PIPELINEC_PYTHON" - "$final_json" <<'PYJSON'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text())
+modules = data.get("modules", {})
+top = modules.get("top")
+if top is None:
+    if len(modules) != 1:
+        raise SystemExit("could not identify final top module while checking QspiDQ1")
+    top = next(iter(modules.values()))
+print(1 if "QspiDQ1" in top.get("ports", {}) else 0)
+PYJSON
+  )
+fi
+if [ "$dq1_in_design" -eq 1 ]; then
+  dq1_none='LIOB33_X0Y47.IOB_Y1.PULLTYPE.NONE'
+  dq1_pullup='LIOB33_X0Y47.IOB_Y1.PULLTYPE.PULLUP'
+  if grep -Fqx "$dq1_none" "$final_fasm"; then
+    echo "Applying OpenXC7 Basys 3 QspiDQ1 pull-up workaround..."
+    sed -i "s/^${dq1_none}$/${dq1_pullup}/" "$final_fasm"
+    (
+      cd "$final_top_dir"
+      fasm2frames \
+        --part "$part" \
+        --db-root "$PRJXRAY_DB_DIR/artix7" \
+        top.fasm > top.frames
+      xc7frames2bit \
+        --part_file "$PRJXRAY_DB_DIR/artix7/$part/part.yaml" \
+        --part_name "$part" \
+        --frm_file top.frames \
+        --output_file top.bit
+    )
+  elif ! grep -Fqx "$dq1_pullup" "$final_fasm"; then
+    echo "expected Basys 3 QspiDQ1 PULLTYPE feature missing from final FASM" >&2
+    exit 1
+  fi
+fi

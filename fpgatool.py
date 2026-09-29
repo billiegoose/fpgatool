@@ -249,7 +249,7 @@ def cmd_build(args: argparse.Namespace) -> Path:
     container_cmd = podman_base(pipelinec_dir=pipelinec_dir) + [
         "nix",
         "--extra-experimental-features", "nix-command flakes",
-        "develop", "/workspace/toolchain",
+        "develop", "path:/workspace/toolchain",
         "--command", "bash", "/workspace/toolchain/build-pipelinec.sh",
         "/opt/PipelineC",
         container_design_path(source),
@@ -378,7 +378,7 @@ def cmd_shell(args: argparse.Namespace) -> None:
     cmd = podman_base(pipelinec_dir=pipelinec_dir, interactive=True) + [
         "nix",
         "--extra-experimental-features", "nix-command flakes",
-        "develop", "/workspace/toolchain",
+        "develop", "path:/workspace/toolchain",
         "--command", "bash",
     ]
     run(cmd)
