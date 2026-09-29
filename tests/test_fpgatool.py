@@ -292,6 +292,62 @@ class FPGAToolTests(unittest.TestCase):
             source,
         )
 
+    def test_qspi_ereader_uses_separate_read_only_text_sector(self):
+        reader = (ROOT / "examples" / "hardware" / "qspi_text_reader.py").read_text()
+        self.assertIn("_TEXT_SECTOR_ADDRESS = 0x3E0000", reader)
+        self.assertIn("_TEXT_DATA_ADDRESS = _TEXT_SECTOR_ADDRESS + 6", reader)
+        self.assertIn("tx_shift = (uint64_t(0x03) << 56) | (uint64_t(_TEXT_SECTOR_ADDRESS) << 32)", reader)
+        self.assertIn("tx_shift = (uint64_t(0x03) << 56) | (uint64_t(address) << 32)", reader)
+        self.assertEqual(reader.count("uint64_t(0x03) << 56"), 2)
+        self.assertNotIn("command: uint32_t", reader)
+        self.assertNotIn("uint64_t(command << 32)", reader)
+        self.assertNotIn("uint64_t(command) << 32", reader)
+        self.assertIn("_MAGIC = 0x45524452", reader)
+        self.assertIn("uint64_t(0x03) << 56", reader)
+        self.assertNotIn("0x02 << 24", reader)
+        self.assertNotIn("0xD8 << 24", reader)
+        self.assertNotIn("0xC7", reader)
+        self.assertIn("wake_shift = 102", reader)
+        self.assertIn("wake_shift = 153", reader)
+        self.assertIn("wake_shift = 171", reader)
+
+        demo = (ROOT / "examples" / "qspi_ereader.py").read_text()
+        self.assertIn("board_buttons.BTNL", demo)
+        self.assertIn("board_buttons.BTNR", demo)
+        self.assertIn("read_text_window", demo)
+        self.assertIn("page.char0", demo)
+        self.assertIn("page.char3", demo)
+        self.assertIn("left_stable: Reg[uint1_t] = 0", demo)
+        self.assertIn("right_stable: Reg[uint1_t] = 0", demo)
+        self.assertIn("left_count: Reg[uint21_t] = 0", demo)
+        self.assertIn("right_count: Reg[uint21_t] = 0", demo)
+        self.assertIn("left_event: Reg[uint1_t] = 0", demo)
+        self.assertIn("right_event: Reg[uint1_t] = 0", demo)
+        self.assertIn("left_count >= 1_999_999", demo)
+        self.assertIn("right_count >= 1_999_999", demo)
+        self.assertNotIn("prev_left", demo)
+        self.assertNotIn("prev_right", demo)
+        self.assertNotIn("debounce: Reg[uint22_t]", demo)
+        reader_call = "page = text_reader.read_text_window(board_qspi.QspiDQ1, left_event, right_event)"
+        self.assertIn(reader_call, demo)
+        self.assertLess(demo.index(reader_call), demo.index("left_event = 0"))
+        self.assertIn("board_seven_segment.CA = seg[0]", demo)
+        self.assertIn("board_seven_segment.CG = seg[6]", demo)
+
+    def test_qspi_ereader_image_packer_reserves_exactly_one_sector(self):
+        import importlib.util
+        path = ROOT / "examples" / "make_qspi_ereader_image.py"
+        spec = importlib.util.spec_from_file_location("qspi_ereader_image", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        image = module.build_image("Hello   world\nfrom FPGA")
+        self.assertEqual(len(image), 64 * 1024)
+        self.assertEqual(image[:4], b"ERDR")
+        length = int.from_bytes(image[4:6], "big")
+        self.assertEqual(image[6:6 + length], b"HELLO WORLD FROM FPGA")
+        self.assertEqual(image[6 + length:], b"\xff" * (len(image) - 6 - length))
+
     def test_default_bitstream_is_stable(self):
         source = (fpgatool.ROOT / "examples" / "blink.py").resolve()
         self.assertEqual(
