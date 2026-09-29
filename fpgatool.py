@@ -275,6 +275,80 @@ def cmd_build(args: argparse.Namespace) -> Path:
     return final_bit
 
 
+def parse_offset(value: str) -> int:
+    try:
+        parsed = int(value, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid offset: {value!r}") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("offset must be non-negative")
+    return parsed
+
+
+def flash_layout(board: dict) -> tuple[int, int, int]:
+    flash = board.get("flash")
+    if not isinstance(flash, dict):
+        raise FPGAToolError(f"board {board.get('name', '<unknown>')!r} does not define a flash layout")
+    try:
+        size = int(flash["size_bytes"])
+        user_start = int(flash["user_data_offset"])
+        erase_block = int(flash["erase_block_bytes"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise FPGAToolError("invalid board flash layout") from exc
+    if not (0 <= user_start < size) or erase_block <= 0:
+        raise FPGAToolError("invalid board flash layout bounds")
+    if erase_block & (erase_block - 1):
+        raise FPGAToolError("flash erase block size must be a power of two")
+    if user_start % erase_block:
+        raise FPGAToolError("user-data start must be erase-block aligned")
+    if size % erase_block:
+        raise FPGAToolError("flash size must be erase-block aligned")
+    return size, user_start, erase_block
+
+
+def validate_data_flash_write(board: dict, binary: Path, offset: int | None) -> tuple[int, int, int]:
+    if not binary.is_file():
+        raise FPGAToolError(f"binary file does not exist: {binary}")
+    size, user_start, erase_block = flash_layout(board)
+    if offset is None:
+        offset = user_start
+    length = binary.stat().st_size
+    if length <= 0:
+        raise FPGAToolError(f"binary file is empty: {binary}")
+    if offset < user_start:
+        raise FPGAToolError(
+            f"offset 0x{offset:x} overlaps the FPGA configuration region; "
+            f"user data starts at 0x{user_start:x}"
+        )
+    end = offset + length
+    if end > size:
+        raise FPGAToolError(
+            f"binary does not fit in flash: 0x{offset:x} + 0x{length:x} "
+            f"extends past 0x{size:x}"
+        )
+    return offset, length, erase_block
+
+
+def openfpgaloader_data_command(board: dict, binary: Path, offset: int) -> list[str]:
+    programmer = board["programmer"]
+    if programmer["type"] != "openfpgaloader":
+        raise FPGAToolError(f"unsupported programmer type: {programmer['type']}")
+    if programmer.get("program_mode") != "flash":
+        raise FPGAToolError(
+            f"unsupported program_mode: {programmer.get('program_mode')!r}; expected 'flash'"
+        )
+    exe = require_tool("openFPGALoader")
+    return [
+        exe,
+        "--board", programmer["board"],
+        "-f",
+        "--file-type", "bin",
+        "--offset", str(offset),
+        "--verify",
+        "--bitstream", str(binary),
+    ]
+
+
 def openfpgaloader_command(board: dict, bitstream: Path, *, persistent: bool) -> list[str]:
     programmer = board["programmer"]
     if programmer["type"] != "openfpgaloader":
@@ -334,6 +408,32 @@ def cmd_program(args: argparse.Namespace) -> None:
     program_bitstream(args.board, require_bitstream(args.source))
 
 
+def cmd_program_data(args: argparse.Namespace) -> None:
+    board = board_config(args.board)
+    # Unlike design sources, host-side asset files do not need to live under the
+    # fpgatool checkout: they are consumed directly by the native programmer.
+    binary = Path(args.source).expanduser().resolve()
+    offset, length, erase_block = validate_data_flash_write(board, binary, args.offset)
+    touched_start = offset & ~(erase_block - 1)
+    touched_end = (offset + length + erase_block - 1) & ~(erase_block - 1)
+    log = ROOT / "build" / args.board / "program-data.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    print(
+        f"Programming {length} bytes to {board['name']} user flash "
+        f"at 0x{offset:06x}..0x{offset + length - 1:06x}..."
+    )
+    if touched_start != offset or touched_end != offset + length:
+        print(
+            f"Note: SPI flash erase granularity is 0x{erase_block:x}; "
+            f"the programmer may erase 0x{touched_start:06x}..0x{touched_end - 1:06x}."
+        )
+    try:
+        run(openfpgaloader_data_command(board, binary, offset), log_path=log)
+    except subprocess.CalledProcessError as exc:
+        raise FPGAToolError(f"data programming failed; see {log}") from exc
+    print(f"✓ Programmed and verified {binary} at 0x{offset:06x}")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     source = normalize_source(args.source)
     if source.suffix.lower() == ".bit":
@@ -389,9 +489,10 @@ def parser() -> argparse.ArgumentParser:
         prog="fpgatool.sh",
         description="Build FPGA designs, load them into volatile SRAM, or program persistent flash.",
     )
-    p.add_argument("command", nargs="?", choices=("build", "load", "run", "program", "doctor", "shell"))
-    p.add_argument("source", nargs="?", help="design source for build/run, or an existing .bit file for load/program")
+    p.add_argument("command", nargs="?", choices=("build", "load", "run", "program", "program-data", "doctor", "shell"))
+    p.add_argument("source", nargs="?", help="design source, .bit file, or binary data file depending on command")
     p.add_argument("--board", default=DEFAULT_BOARD, help=f"board profile (default: {DEFAULT_BOARD})")
+    p.add_argument("--offset", type=parse_offset, default=None, help="flash byte offset for program-data (default: board user-data start)")
     p.add_argument("--comb", action="store_true", help="disable PipelineC auto-pipelining and build the design as written")
     p.add_argument("-v", "--verbose", action="store_true", help="stream full toolchain output")
     return p
@@ -405,9 +506,11 @@ def main() -> int:
     if args.command is None:
         p.print_help()
         return 0
-    if args.command in {"build", "load", "run", "program"} and args.source is None:
+    if args.command in {"build", "load", "run", "program", "program-data"} and args.source is None:
         if args.command in {"load", "program"}:
             p.error(f"{args.command} requires a .bit file, e.g. build/basys3/blink/blink.bit")
+        if args.command == "program-data":
+            p.error("program-data requires a binary file")
         p.error(f"{args.command} requires a design source, e.g. examples/blink.py")
     if args.source is None:
         args.source = str(DEFAULT_SOURCE)
@@ -417,6 +520,7 @@ def main() -> int:
             "load": cmd_load,
             "run": cmd_run,
             "program": cmd_program,
+            "program-data": cmd_program_data,
             "doctor": cmd_doctor,
             "shell": cmd_shell,
         }[args.command](args)

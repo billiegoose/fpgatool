@@ -14,3 +14,12 @@ type = "openfpgaloader"
 board = "basys3"
 load_mode = "sram"
 program_mode = "flash"
+
+[flash]
+# 32-Mbit (4 MiB) configuration SPI flash.  Full XC7A35T configuration
+# payloads are 0x21728c bytes; openFPGALoader erases through the containing
+# 64 KiB block. Physical readback confirms 0x220000 is the first free block.
+size_bytes = 0x400000
+configuration_end_offset = 0x220000
+user_data_offset = 0x220000
+erase_block_bytes = 0x10000

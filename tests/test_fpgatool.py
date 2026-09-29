@@ -229,23 +229,48 @@ class FPGAToolTests(unittest.TestCase):
         self.assertIn('if [ "$dq1_in_design" -eq 1 ]; then', build_script)
         self.assertIn("Modern Himbächel with XDC pull normalization", build_script)
 
-    def test_qspi_flash_demo_is_read_only_jedec_id(self):
+    def test_qspi_flash_jedec_id_path_remains_read_only(self):
         hw = (ROOT / "examples" / "hardware" / "qspi_flash.py").read_text()
-        self.assertIn("159  # 0x9F, Read JEDEC ID", hw)
-        self.assertIn("_STARTUP_PRIME_CYCLES = 8", hw)
-        self.assertIn("_ST_PRIME", hw)
-        self.assertIn("tx_shift = 102  # 0x66, Reset Enable.", hw)
-        self.assertIn("tx_shift = 153  # 0x99, Reset.", hw)
-        self.assertIn("tx_shift = 171  # 0xAB, Release from Deep Power-Down.", hw)
-        self.assertIn("_RES_CYCLES = 10_000", hw)
-        self.assertNotIn("0x02", hw)
-        self.assertNotIn("0x20", hw)
-        self.assertNotIn("0xD8", hw)
+        jedec_start = hw.index("def read_jedec_id(")
+        generic_start = hw.index("# Generic single-SPI byte/block access")
+        jedec = hw[jedec_start:generic_start]
+        self.assertIn("159  # 0x9F, Read JEDEC ID", jedec)
+        self.assertIn("_ST_PRIME", jedec)
+        self.assertIn("tx_shift = 102  # 0x66, Reset Enable.", jedec)
+        self.assertIn("tx_shift = 153  # 0x99, Reset.", jedec)
+        self.assertIn("tx_shift = 171  # 0xAB, Release from Deep Power-Down.", jedec)
+        self.assertNotIn("0x02", jedec)
+        self.assertNotIn("0xD8", jedec)
         demo = (ROOT / "examples" / "qspi_flash_id.py").read_text()
         self.assertIn("read_jedec_id", demo)
         self.assertIn("manufacturer_id", demo)
         self.assertIn("memory_type", demo)
         self.assertIn("capacity", demo)
+
+    def test_qspi_flash_exposes_generic_arbitrary_byte_access(self):
+        hw = (ROOT / "examples" / "hardware" / "qspi_flash.py").read_text()
+        self.assertIn("class qspi_flash_byte_io_t", hw)
+        self.assertIn("def flash_byte_io(", hw)
+        self.assertIn("FLASH_OP_READ = 1", hw)
+        self.assertIn("FLASH_OP_PROGRAM = 2", hw)
+        self.assertIn("FLASH_OP_ERASE_BLOCK = 3", hw)
+        self.assertIn("op: uint2_t", hw)
+        self.assertIn("address: uint32_t", hw)
+        self.assertIn("if op != FLASH_OP_NONE", hw)
+        self.assertIn("requested_op: Reg[uint2_t] = FLASH_OP_NONE", hw)
+        self.assertIn("state = _BYTE_ST_DISPATCH", hw)
+        self.assertIn("if requested_op == FLASH_OP_ERASE_BLOCK", hw)
+        self.assertIn("elif requested_op == FLASH_OP_PROGRAM", hw)
+        self.assertIn("elif requested_op == FLASH_OP_READ", hw)
+        self.assertIn("write_data: uint8_t", hw)
+        self.assertIn("(uint64_t(0x03) << 56) | (uint64_t(requested_address) << 32)", hw)
+        self.assertIn("(uint64_t(0x02) << 56)", hw)
+        self.assertIn("(uint64_t(0xD8) << 56)", hw)
+        self.assertIn("uint64_t(0x06) << 56", hw)
+        self.assertIn("uint64_t(0x05) << 56", hw)
+        self.assertIn("_BYTE_POWERUP_CYCLES = 2_000_000", hw)
+        self.assertIn("_BYTE_ST_PROGRAM_VERIFY_DONE", hw)
+        self.assertNotIn("0xC7", hw)
 
     def test_qspi_flash_rw_demo_uses_reserved_tail_block(self):
         hw = (ROOT / "examples" / "hardware" / "qspi_flash_rw.py").read_text()
@@ -347,6 +372,75 @@ class FPGAToolTests(unittest.TestCase):
         length = int.from_bytes(image[4:6], "big")
         self.assertEqual(image[6:6 + length], b"HELLO WORLD FROM FPGA")
         self.assertEqual(image[6 + length:], b"\xff" * (len(image) - 6 - length))
+
+    def test_basys3_flash_layout_reserves_configuration_image(self):
+        board = fpgatool.board_config("basys3")
+        self.assertEqual(board["flash"]["size_bytes"], 0x400000)
+        self.assertEqual(board["flash"]["configuration_end_offset"], 0x220000)
+        self.assertEqual(board["flash"]["user_data_offset"], 0x220000)
+        self.assertEqual(board["flash"]["erase_block_bytes"], 0x10000)
+
+    def test_flash_layout_requires_erase_aligned_user_region(self):
+        board = {
+            "name": "test",
+            "flash": {
+                "size_bytes": 0x400000,
+                "user_data_offset": 0x220001,
+                "erase_block_bytes": 0x10000,
+            },
+        }
+        with self.assertRaisesRegex(fpgatool.FPGAToolError, "erase-block aligned"):
+            fpgatool.flash_layout(board)
+
+    def test_program_data_defaults_to_first_safe_user_flash_block(self):
+        board = fpgatool.board_config("basys3")
+        path = ROOT / ".fpgatool-test-data.bin"
+        try:
+            path.write_bytes(b"asset")
+            offset, length, erase = fpgatool.validate_data_flash_write(board, path, None)
+            self.assertEqual(offset, 0x220000)
+            self.assertEqual(length, 5)
+            self.assertEqual(erase, 0x10000)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_program_data_rejects_configuration_overlap_and_flash_overflow(self):
+        board = fpgatool.board_config("basys3")
+        path = ROOT / ".fpgatool-test-data.bin"
+        try:
+            path.write_bytes(b"abcd")
+            with self.assertRaisesRegex(fpgatool.FPGAToolError, "overlaps the FPGA configuration region"):
+                fpgatool.validate_data_flash_write(board, path, 0x21FFFF)
+            with self.assertRaisesRegex(fpgatool.FPGAToolError, "does not fit in flash"):
+                fpgatool.validate_data_flash_write(board, path, 0x3FFFFE)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_program_data_uses_raw_binary_offset_and_verify(self):
+        board = fpgatool.board_config("basys3")
+        with mock.patch.object(fpgatool, "require_tool", return_value="/usr/bin/openFPGALoader"):
+            cmd = fpgatool.openfpgaloader_data_command(board, Path("assets.bin"), 0x220000)
+        self.assertEqual(cmd[:3], ["/usr/bin/openFPGALoader", "--board", "basys3"])
+        self.assertIn("-f", cmd)
+        self.assertEqual(cmd[cmd.index("--file-type") + 1], "bin")
+        self.assertEqual(cmd[cmd.index("--offset") + 1], str(0x220000))
+        self.assertIn("--verify", cmd)
+        self.assertEqual(cmd[cmd.index("--bitstream") + 1], "assets.bin")
+
+    def test_program_data_accepts_binary_outside_checkout(self):
+        external = Path("/tmp/fpgatool-external-asset.bin")
+        args = mock.Mock(source=str(external), board="basys3", offset=None)
+        with mock.patch.object(fpgatool, "validate_data_flash_write", return_value=(0x220000, 4, 0x10000)) as validate_mock, mock.patch.object(
+            fpgatool, "openfpgaloader_data_command", return_value=["loader"]
+        ), mock.patch.object(fpgatool, "run"):
+            fpgatool.cmd_program_data(args)
+        self.assertEqual(validate_mock.call_args.args[1], external.resolve())
+
+    def test_program_data_cli_accepts_hex_offset(self):
+        args = fpgatool.parser().parse_args(["program-data", "asset.bin", "--offset", "0x230000"])
+        self.assertEqual(args.command, "program-data")
+        self.assertEqual(args.source, "asset.bin")
+        self.assertEqual(args.offset, 0x230000)
 
     def test_default_bitstream_is_stable(self):
         source = (fpgatool.ROOT / "examples" / "blink.py").resolve()

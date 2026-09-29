@@ -41,6 +41,8 @@ Commands are deliberately literal:
 ./fpgatool.sh load build/basys3/blink/blink.bit
 ./fpgatool.sh run examples/blink.py
 ./fpgatool.sh program build/basys3/blink/blink.bit
+./fpgatool.sh program-data assets.bin
+./fpgatool.sh program-data assets.bin --offset 0x230000
 ./fpgatool.sh doctor
 ./fpgatool.sh shell
 ```
@@ -49,9 +51,18 @@ Commands are deliberately literal:
 - `load`: existing `.bit` -> volatile FPGA SRAM
 - `run`: build a design source, then load it into volatile SRAM
 - `program`: existing `.bit` -> persistent board flash
+- `program-data`: raw binary -> verified user-data area in configuration flash; defaults to `0x220000` on Basys 3
 
 `program` intentionally requires an already-built `.bit` file so a persistent flash
 write is always an explicit operation. `doctor` and `shell` do not require a source.
+
+On Basys 3, the XC7A35T full configuration payload is fixed at `0x21728c` bytes.
+The flash programmer erases through the containing 64 KiB block, so fpgatool reserves
+`0x000000..0x21ffff` for FPGA configuration and treats `0x220000..0x3fffff`
+as user data. `program-data` refuses writes below `0x220000` or past the 4 MiB end
+of flash, passes the raw file to openFPGALoader with an explicit offset, and enables
+readback verification. Writes may erase whole 64 KiB blocks touched by the requested
+range, so unrelated data sharing those blocks should be packed together.
 Normal builds keep the underlying Nix/PipelineC/programmer output quiet and save it
 as `build.log`, `load.log`, or `program.log` beside the design output. Pass
 `--verbose` (or `-v`) to stream the full tool output directly to the terminal.
