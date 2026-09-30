@@ -9,6 +9,7 @@ simultaneously. Top-level examples own pins; reusable logic lives under
 
 from pypeline import *
 from vga.types import vga_12bpp_t
+from vga.timing import make_vga_timing, VGA_640_480
 import fpgatool_board.basys3.part35t
 import fpgatool_board.basys3.leds as board_leds
 import fpgatool_board.basys3.switches as board_switches
@@ -22,10 +23,17 @@ import hardware.buttons as button_hw
 
 _button = button_hw.make_button()
 import hardware.uart as uart_hw
-import hardware.vga_timing as vga_timing
 import hardware.vga_test_bars as vga_bars
 import hardware.mouse_cursor as mouse_cursor
 import hardware.ps2_mouse as ps2_mouse_hw
+
+
+vga_timing = make_vga_timing(VGA_640_480)
+_MAIN_CLK_MHZ = 100.0
+_PIXEL_DIV = int(_MAIN_CLK_MHZ / vga_timing.pixel_clk_mhz)
+if _MAIN_CLK_MHZ != (_PIXEL_DIV * vga_timing.pixel_clk_mhz):
+    raise ValueError("VGA pixel clock must divide the demo MAIN clock exactly")
+_pixel_phase_t = make_uint_t(max(1, (_PIXEL_DIV - 1).bit_length()))
 
 
 @hw_func
@@ -46,7 +54,7 @@ def write_vga_pins(px: vga_12bpp_t):
     board_vga.VGA_VS = px.vs
 
 
-@MAIN(100.0)
+@MAIN(_MAIN_CLK_MHZ)
 def kitchen_sink_demo():
     left_button = _button(board_buttons.BTNL)
     right_button = _button(board_buttons.BTNR)
@@ -96,21 +104,29 @@ def kitchen_sink_demo():
     uart = uart_hw.uart_echo(board_uart.RsRx, uint8_t(0), uint8_t(0))
     board_uart.RsTx = uart.tx
 
-    sig = vga_timing.vga_timing_25mhz_from_100mhz()
-    bg = vga_bars.test_bars(sig)
+    pixel_phase: Reg[_pixel_phase_t] = 0
+    px: Reg[vga_12bpp_t]
 
     mouse = ps2_mouse_hw.ps2_mouse(board_ps2.PS2Clk_I, board_ps2.PS2Data_I)
     board_ps2.PS2Clk_T = mouse.clk_release
     board_ps2.PS2Data_T = mouse.data_release
 
-    write_vga_pins(mouse_cursor.overlay_cursor(
-        sig,
-        bg,
-        mouse.x,
-        mouse.y,
-        mouse.left,
-        mouse.middle,
-        mouse.right,
-        mouse.wheel,
-        mouse.wheel_mode,
-    ))
+    if pixel_phase == (_PIXEL_DIV - 1):
+        pixel_phase = 0
+        sig = vga_timing()
+        bg = vga_bars.test_bars(sig)
+        px = mouse_cursor.overlay_cursor(
+            sig,
+            bg,
+            mouse.x,
+            mouse.y,
+            mouse.left,
+            mouse.middle,
+            mouse.right,
+            mouse.wheel,
+            mouse.wheel_mode,
+        )
+    else:
+        pixel_phase = pixel_phase + 1
+
+    write_vga_pins(px)
