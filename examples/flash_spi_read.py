@@ -1,6 +1,6 @@
 # pyright: reportInvalidTypeForm=none
 # pyright: reportUndefinedVariable=none
-"""The world's worst e-reader: four characters of QSPI-backed text at a time."""
+"""The world's worst e-reader: four characters of raw SPI-backed text at a time."""
 
 from pypeline import *
 import fpgatool_board.basys3.part35t
@@ -8,11 +8,20 @@ import fpgatool_board.basys3.qspi as board_qspi
 import fpgatool_board.basys3.buttons as board_buttons
 import fpgatool_board.basys3.leds as board_leds
 import fpgatool_board.basys3.seven_segment as board_seven_segment
-import hardware.QSPI as qspi_flash
+import hardware.SPI as spi_flash
 import hardware.buttons as button_hw
+
+_button = button_hw.make_button()
 
 
 def _glyph(ch: uint8_t) -> uint7_t:
+    # Accept ordinary text files: render ASCII lower-case as upper-case and
+    # common whitespace controls as a blank.
+    if ch >= 97 and ch <= 122:
+        ch = ch - uint8_t(32)
+    elif ch == 9 or ch == 10 or ch == 13:
+        ch = uint8_t(32)
+
     # Active-low abcdefg. Lower-case-looking approximations are intentional for
     # letters that a seven-segment display cannot represent cleanly.
     s: uint7_t = 127
@@ -59,118 +68,67 @@ def _glyph(ch: uint8_t) -> uint7_t:
 
 
 
-_TEXT_SECTOR_ADDRESS = 0x3E0000
-_TEXT_DATA_ADDRESS = _TEXT_SECTOR_ADDRESS + 6
-_TEXT_MAX_LENGTH = 65530
-_MAGIC = 0x45524452  # ASCII ERDR
+_TEXT_ADDRESS = 0x3E0000
+# Keep one erased 0xFF byte available as an end-of-text sentinel.
+_TEXT_MAX_LENGTH = 65535
+_TEXT_LAST_POSITION = _TEXT_MAX_LENGTH - 4
 
-_ST_HEADER_READY = 0
-_ST_HEADER_LAUNCH = 1
-_ST_HEADER_WAIT = 2
-_ST_READY = 3
-_ST_WINDOW_READY = 4
-_ST_WINDOW_LAUNCH = 5
-_ST_WINDOW_WAIT = 6
+_ST_READY = 0
+_ST_WINDOW_READY = 1
+_ST_WINDOW_LAUNCH = 2
+_ST_WINDOW_WAIT = 3
 
 
 @struct
-class qspi_text_window_t(NamedTuple):
+class spi_text_window_t(NamedTuple):
     cclk: uint1_t
     cs_n: uint1_t
     dq0: uint1_t
-    dq0_t: uint1_t
-    dq1: uint1_t
-    dq1_t: uint1_t
     dq2: uint1_t
-    dq2_t: uint1_t
     dq3: uint1_t
-    dq3_t: uint1_t
     char0: uint8_t
     char1: uint8_t
     char2: uint8_t
     char3: uint8_t
     position: uint16_t
-    length: uint16_t
     valid: uint1_t
     busy: uint1_t
     error: uint1_t
-    quad_enabled: uint1_t
-    quad_activity: uint1_t
 
 
 @hw_func
-def read_text_window(dq: uint4_t, move_left: uint1_t, move_right: uint1_t) -> qspi_text_window_t:
-    state: Reg[uint3_t] = _ST_HEADER_READY
+def read_text_window(dq1: uint1_t, move_left: uint1_t, move_right: uint1_t) -> spi_text_window_t:
+    # Each visible window reads four characters plus one lookahead byte.  An
+    # erased 0xFF byte terminates the document, so no header or startup scan is
+    # required and a plain text file can be flashed directly with program-data.
+    state: Reg[uint2_t] = _ST_WINDOW_READY
     byte_index: Reg[uint3_t] = 0
-
-    header_magic: Reg[uint32_t] = 0
-    header_length_hi: Reg[uint8_t] = 0
     position: Reg[uint16_t] = 0
-    length: Reg[uint16_t] = 0
     char0: Reg[uint8_t] = 32
     char1: Reg[uint8_t] = 32
     char2: Reg[uint8_t] = 32
     char3: Reg[uint8_t] = 32
     valid: Reg[uint1_t] = 0
     error: Reg[uint1_t] = 0
+    can_move_right: Reg[uint1_t] = 0
 
-    op: uint2_t = qspi_flash.FLASH_OP_NONE
-    address: uint32_t = uint32_t(_TEXT_SECTOR_ADDRESS)
+    op: uint2_t = spi_flash.FLASH_OP_NONE
+    address: uint32_t = uint32_t(_TEXT_ADDRESS)
+    if state == _ST_WINDOW_LAUNCH:
+        op = spi_flash.FLASH_OP_READ
+        address = uint32_t(_TEXT_ADDRESS) + uint32_t(position) + byte_index
 
-    if state == _ST_HEADER_LAUNCH:
-        op = qspi_flash.FLASH_OP_READ
-        address = uint32_t(_TEXT_SECTOR_ADDRESS) + byte_index
-    elif state == _ST_WINDOW_LAUNCH:
-        op = qspi_flash.FLASH_OP_READ
-        address = uint32_t(_TEXT_DATA_ADDRESS) + position + byte_index
+    flash = spi_flash.flash_byte_io(dq1, op, address, uint8_t(0))
 
-    flash = qspi_flash.flash_byte_io(dq, op, address, uint8_t(0))
-
-    if state == _ST_HEADER_READY:
-        if flash.ready:
-            state = _ST_HEADER_LAUNCH
-
-    elif state == _ST_HEADER_LAUNCH:
-        state = _ST_HEADER_WAIT
-
-    elif state == _ST_HEADER_WAIT:
-        if flash.done:
-            if byte_index < 4:
-                header_magic = (header_magic << 8) | flash.read_data
-                byte_index = byte_index + 1
-                state = _ST_HEADER_READY
-            elif byte_index == 4:
-                header_length_hi = flash.read_data
-                byte_index = 5
-                state = _ST_HEADER_READY
-            else:
-                header_length: uint16_t = concat(header_length_hi, flash.read_data)
-                if header_magic == _MAGIC and header_length > 0 and header_length <= _TEXT_MAX_LENGTH:
-                    length = header_length
-                    position = 0
-                    valid = 1
-                    error = 0
-                    byte_index = 0
-                    state = _ST_WINDOW_READY
-                else:
-                    valid = 0
-                    error = 1
-                    byte_index = 0
-                    state = _ST_READY
-
-    elif state == _ST_READY:
-        if valid:
-            max_position: uint16_t = 0
-            if length > 4:
-                max_position = length - 4
-            if move_left and position > 0:
-                position = position - 1
-                byte_index = 0
-                state = _ST_WINDOW_READY
-            elif move_right and position < max_position:
-                position = position + 1
-                byte_index = 0
-                state = _ST_WINDOW_READY
+    if state == _ST_READY:
+        if move_left and position > 0:
+            position = position - 1
+            byte_index = 0
+            state = _ST_WINDOW_READY
+        elif move_right and can_move_right and position < _TEXT_LAST_POSITION:
+            position = position + 1
+            byte_index = 0
+            state = _ST_WINDOW_READY
 
     elif state == _ST_WINDOW_READY:
         if flash.ready:
@@ -179,73 +137,101 @@ def read_text_window(dq: uint4_t, move_left: uint1_t, move_right: uint1_t) -> qs
     elif state == _ST_WINDOW_LAUNCH:
         state = _ST_WINDOW_WAIT
 
-    elif state == _ST_WINDOW_WAIT:
+    else:  # _ST_WINDOW_WAIT
         if flash.done:
             if byte_index == 0:
-                char0 = flash.read_data
-                byte_index = 1
-                state = _ST_WINDOW_READY
+                if flash.read_data == 255:
+                    char0 = 32
+                    char1 = 32
+                    char2 = 32
+                    char3 = 32
+                    valid = 0
+                    error = 1
+                    can_move_right = 0
+                    state = _ST_READY
+                else:
+                    char0 = flash.read_data
+                    valid = 1
+                    error = 0
+                    byte_index = 1
+                    state = _ST_WINDOW_READY
             elif byte_index == 1:
-                char1 = flash.read_data
-                byte_index = 2
-                state = _ST_WINDOW_READY
+                if flash.read_data == 255:
+                    char1 = 32
+                    char2 = 32
+                    char3 = 32
+                    can_move_right = 0
+                    byte_index = 0
+                    state = _ST_READY
+                else:
+                    char1 = flash.read_data
+                    byte_index = 2
+                    state = _ST_WINDOW_READY
             elif byte_index == 2:
-                char2 = flash.read_data
-                byte_index = 3
-                state = _ST_WINDOW_READY
+                if flash.read_data == 255:
+                    char2 = 32
+                    char3 = 32
+                    can_move_right = 0
+                    byte_index = 0
+                    state = _ST_READY
+                else:
+                    char2 = flash.read_data
+                    byte_index = 3
+                    state = _ST_WINDOW_READY
+            elif byte_index == 3:
+                if flash.read_data == 255:
+                    char3 = 32
+                    can_move_right = 0
+                    byte_index = 0
+                    state = _ST_READY
+                else:
+                    char3 = flash.read_data
+                    byte_index = 4
+                    state = _ST_WINDOW_READY
             else:
-                char3 = flash.read_data
+                can_move_right = flash.read_data != 255
                 byte_index = 0
                 state = _ST_READY
 
     busy: uint1_t = state != _ST_READY
-    return qspi_text_window_t(
+    return spi_text_window_t(
         cclk=flash.cclk,
         cs_n=flash.cs_n,
         dq0=flash.dq0,
-        dq0_t=flash.dq0_t,
-        dq1=flash.dq1,
-        dq1_t=flash.dq1_t,
         dq2=flash.dq2,
-        dq2_t=flash.dq2_t,
         dq3=flash.dq3,
-        dq3_t=flash.dq3_t,
         char0=char0,
         char1=char1,
         char2=char2,
         char3=char3,
         position=position,
-        length=length,
         valid=valid,
         busy=busy,
         error=error,
-        quad_enabled=flash.quad_enabled,
-        quad_activity=flash.quad_activity,
     )
 
 
 @MAIN(100.0)
-def qspi_ereader():
+def flash_spi_read():
     scan: Reg[uint18_t] = 0
 
-    left_button = button_hw.debounce_button(board_buttons.BTNL)
-    right_button = button_hw.debounce_button(board_buttons.BTNR)
+    left_button = _button(board_buttons.BTNL)
+    right_button = _button(board_buttons.BTNR)
 
-    dq: uint4_t = concat(
-        board_qspi.QspiDQ3_I, board_qspi.QspiDQ2_I,
-        board_qspi.QspiDQ1_I, board_qspi.QspiDQ0_I
+    page = read_text_window(
+        board_qspi.QspiDQ1_I, left_button.repeat, right_button.repeat
     )
-    page = read_text_window(dq, left_button.pressed, right_button.pressed)
 
     board_qspi.QspiCSn = board_qspi.drive_clock_and_cs(page.cclk, page.cs_n, not page.busy)
+    # Standard SPI: IO0 is MOSI, IO1 is MISO, IO2/IO3 stay high.
     board_qspi.QspiDQ0_O = page.dq0
-    board_qspi.QspiDQ0_T = page.dq0_t
-    board_qspi.QspiDQ1_O = page.dq1
-    board_qspi.QspiDQ1_T = page.dq1_t
+    board_qspi.QspiDQ0_T = 0
+    board_qspi.QspiDQ1_O = 0
+    board_qspi.QspiDQ1_T = 1
     board_qspi.QspiDQ2_O = page.dq2
-    board_qspi.QspiDQ2_T = page.dq2_t
+    board_qspi.QspiDQ2_T = 0
     board_qspi.QspiDQ3_O = page.dq3
-    board_qspi.QspiDQ3_T = page.dq3_t
+    board_qspi.QspiDQ3_T = 0
 
     scan = scan + 1
     digit: uint2_t = scan[17:16]
@@ -291,10 +277,7 @@ def qspi_ereader():
     board_leds.LD9 = 0
     board_leds.LD10 = 0
     board_leds.LD11 = page.busy
-    # Hardware proof indicators:
-    #   LD15 = the flash Configuration Register reports QUAD enabled.
-    #   LD12 = sticky flag set only after a 4-bit QSPI payload nibble was sampled.
-    board_leds.LD12 = page.quad_activity
+    board_leds.LD12 = 0
     board_leds.LD13 = page.error
     board_leds.LD14 = page.valid
-    board_leds.LD15 = page.quad_enabled
+    board_leds.LD15 = 0

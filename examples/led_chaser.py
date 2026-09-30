@@ -11,14 +11,16 @@ import fpgatool_board.basys3.buttons as board_buttons
 import hardware.led_chaser as hw
 import hardware.buttons as button_hw
 
+_button = button_hw.make_button()
+
 
 @MAIN(100.0)
 def led_chaser():
-    left_button = button_hw.debounce_button(board_buttons.BTNL)
-    right_button = button_hw.debounce_button(board_buttons.BTNR)
-    up_button = button_hw.debounce_button(board_buttons.BTNU)
-    down_button = button_hw.debounce_button(board_buttons.BTND)
-    center_button = button_hw.debounce_button(board_buttons.BTNC)
+    left_button = _button(board_buttons.BTNL)
+    right_button = _button(board_buttons.BTNR)
+    up_button = _button(board_buttons.BTNU)
+    down_button = _button(board_buttons.BTND)
+    center_button = _button(board_buttons.BTNC)
 
     out = hw.led_chaser(
         board_switches.SW0, board_switches.SW1, board_switches.SW2, board_switches.SW3,

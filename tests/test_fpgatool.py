@@ -214,14 +214,6 @@ class FPGAToolTests(unittest.TestCase):
         self.assertIn("_bind_basys3_qspi_pads", qspi)
         self.assertIn("when {enable} = unsigned'(0 => '0')", qspi)
         self.assertIn("if n_read > 1 or n_drive != 1", qspi)
-        demo = (ROOT / "examples" / "qspi_flash_id.py").read_text()
-        self.assertIn(
-            "board_qspi.QspiCSn = board_qspi.drive_clock_and_cs(",
-            demo,
-        )
-        self.assertIn("board_qspi.QspiDQ0_O = flash.dq0", demo)
-        self.assertIn("board_qspi.QspiDQ0_T = 0", demo)
-        self.assertIn("board_qspi.QspiDQ1_T = 1", demo)
         pins = (ROOT / "boards" / "basys3" / "pins.xdc").read_text()
         self.assertIn("LOC D18 [get_ports QspiDQ0]", pins)
         self.assertIn("LOC D19 [get_ports QspiDQ1]", pins)
@@ -252,11 +244,6 @@ class FPGAToolTests(unittest.TestCase):
         self.assertIn("tx_shift = 171  # 0xAB, Release from Deep Power-Down.", jedec)
         self.assertNotIn("0x02", jedec)
         self.assertNotIn("0xD8", jedec)
-        demo = (ROOT / "examples" / "qspi_flash_id.py").read_text()
-        self.assertIn("read_jedec_id", demo)
-        self.assertIn("manufacturer_id", demo)
-        self.assertIn("memory_type", demo)
-        self.assertIn("capacity", demo)
 
     def test_flash_protocol_and_spi_transport_are_split(self):
         hardware = ROOT / "examples" / "hardware"
@@ -268,7 +255,7 @@ class FPGAToolTests(unittest.TestCase):
         self.assertIn("from hardware.flash import (", spi)
         self.assertIn("def flash_byte_io(", spi)
         self.assertFalse((hardware / "qspi_flash.py").exists())
-        self.assertFalse((hardware / "qspi_flash_rw.py").exists())
+        self.assertFalse((hardware / "flash_qspi_write.py").exists())
         self.assertFalse((hardware / "qspi_text_reader.py").exists())
 
     def test_qspi_flash_status_diagnostic_uses_canonical_flash_module(self):
@@ -277,9 +264,7 @@ class FPGAToolTests(unittest.TestCase):
         self.assertIn("_STATUS_RDSR_COMMAND = 0x0500000000000000", hw)
         self.assertIn("_STATUS_WREN_COMMAND = 0x0600000000000000", hw)
         self.assertNotIn("0xD8", hw[hw.index("# Status/WREN diagnostic"):])
-        demo = (ROOT / "examples" / "qspi_flash_status.py").read_text()
-        self.assertIn("import hardware.SPI as qspi_flash", demo)
-        self.assertIn("qspi_flash.read_status_and_test_wren", demo)
+        self.assertFalse((ROOT / "examples" / "qspi_flash_status.py").exists())
         self.assertFalse((ROOT / "examples" / "hardware" / "qspi_flash_status.py").exists())
 
     def test_qspi_flash_exposes_generic_arbitrary_byte_access(self):
@@ -309,7 +294,7 @@ class FPGAToolTests(unittest.TestCase):
         self.assertNotIn("0xC7", hw)
 
     def test_qspi_flash_rw_demo_uses_generic_flash_interface(self):
-        hw = (ROOT / "examples" / "qspi_flash_rw.py").read_text()
+        hw = (ROOT / "examples" / "flash_qspi_write.py").read_text()
         self.assertIn("import hardware.QSPI as qspi_flash", hw)
         self.assertIn("_USER_BLOCK_ADDRESS = 0x3F0000", hw)
         self.assertIn("qspi_flash.flash_byte_io", hw)
@@ -329,7 +314,7 @@ class FPGAToolTests(unittest.TestCase):
         self.assertNotIn("tx_shift", hw)
         self.assertNotIn("_READ_USER_COMMAND", hw)
         self.assertNotIn("_PROGRAM_USER_COMMAND", hw)
-        demo = (ROOT / "examples" / "qspi_flash_rw.py").read_text()
+        demo = (ROOT / "examples" / "flash_qspi_write.py").read_text()
         self.assertIn("board_buttons.BTNU", demo)
         self.assertIn("board_buttons.BTND", demo)
         self.assertIn("board_buttons.BTNC", demo)
@@ -387,29 +372,57 @@ class FPGAToolTests(unittest.TestCase):
 
     def test_reusable_button_module_is_used_by_all_button_demos(self):
         button_hw = (ROOT / "examples" / "hardware" / "buttons.py").read_text()
-        self.assertIn("def debounce_button(raw: uint1_t)", button_hw)
-        self.assertIn("sync_meta: Reg[uint1_t] = 0", button_hw)
-        self.assertIn("sync_value: Reg[uint1_t] = 0", button_hw)
-        self.assertIn("count: Reg[uint21_t] = 0", button_hw)
-        self.assertIn("_DEBOUNCE_CYCLES = 2_000_000", button_hw)
-        self.assertIn("pressed: uint1_t", button_hw)
-        self.assertIn("released: uint1_t", button_hw)
+        self.assertIn("def make_button(", button_hw)
+        self.assertIn("DEBOUNCE_CYCLES=2_000_000", button_hw)
+        self.assertIn("REPEAT_DELAY_CYCLES=50_000_000", button_hw)
+        self.assertIn("REPEAT_INTERVAL_CYCLES=7_500_000", button_hw)
+        self.assertIn("debounce_count_t = make_uint_t(max(1, (DEBOUNCE_CYCLES - 1).bit_length()))", button_hw)
+        self.assertIn("(max(REPEAT_DELAY_CYCLES, REPEAT_INTERVAL_CYCLES) - 1).bit_length()", button_hw)
+        self.assertIn("@hw_func\n    def button(raw: uint1_t) -> button_t:", button_hw)
+        self.assertIn("count: Reg[debounce_count_t] = 0", button_hw)
+        self.assertIn("repeat_count: Reg[repeat_count_t] = 0", button_hw)
+        self.assertIn("if pressed:", button_hw)
+        self.assertIn("elif repeating:", button_hw)
+        self.assertIn("repeat=repeat", button_hw)
+        self.assertIn("return button", button_hw)
 
         for name in (
-            "qspi_ereader.py",
-            "qspi_flash_rw.py",
+            "flash_spi_read.py",
+            "flash_spi_write.py",
+            "flash_dspi_read.py",
+            "flash_qspi_read.py",
+            "flash_qspi_write.py",
             "led_chaser.py",
             "kitchen_sink_demo.py",
         ):
             demo = (ROOT / "examples" / name).read_text()
             self.assertIn("import hardware.buttons as button_hw", demo)
-            self.assertIn("button_hw.debounce_button(board_buttons.", demo)
+            self.assertIn("_button = button_hw.make_button()", demo)
+            self.assertIn("_button(board_buttons.", demo)
 
-        flash_rw = (ROOT / "examples" / "qspi_flash_rw.py").read_text()
+        flash_rw = (ROOT / "examples" / "flash_qspi_write.py").read_text()
         self.assertNotIn("up_prev: Reg", flash_rw)
         self.assertNotIn("down_prev: Reg", flash_rw)
         self.assertNotIn("center_prev: Reg", flash_rw)
         self.assertNotIn("debounce: Reg", flash_rw)
+
+    def test_button_timing_is_elaboration_time_factory_configuration(self):
+        button_hw = (ROOT / "examples" / "hardware" / "buttons.py").read_text()
+        self.assertIn('raise ValueError("DEBOUNCE_CYCLES must be positive")', button_hw)
+        self.assertIn('raise ValueError("REPEAT_DELAY_CYCLES must be positive")', button_hw)
+        self.assertIn('raise ValueError("REPEAT_INTERVAL_CYCLES must be positive")', button_hw)
+        self.assertNotIn("Reg[uint21_t]", button_hw)
+        self.assertNotIn("Reg[uint26_t]", button_hw)
+
+    def test_flash_read_navigation_uses_keyboard_style_repeat(self):
+        for name in (
+            "flash_spi_read.py",
+            "flash_dspi_read.py",
+            "flash_qspi_read.py",
+        ):
+            demo = (ROOT / "examples" / name).read_text()
+            self.assertIn("left_button.repeat, right_button.repeat", demo)
+            self.assertNotIn("left_button.pressed, right_button.pressed", demo)
 
     def test_pipelinec_wrapper_reapplies_final_hooks_after_final_top_regeneration(self):
         script = (ROOT / "toolchain" / "build-pipelinec.sh").read_text()
@@ -431,54 +444,75 @@ class FPGAToolTests(unittest.TestCase):
             source,
         )
 
-    def test_qspi_ereader_uses_generic_flash_interface(self):
-        reader = (ROOT / "examples" / "qspi_ereader.py").read_text()
+    def test_flash_example_matrix_covers_spi_dspi_and_qspi(self):
+        examples = ROOT / "examples"
+        names = sorted(
+            p.name for p in examples.iterdir()
+            if p.is_file() and p.name.startswith("flash_")
+        )
+        self.assertEqual(
+            names,
+            [
+                "flash_dspi_read.py",
+                "flash_qspi_read.py",
+                "flash_qspi_write.py",
+                "flash_spi_read.py",
+                "flash_spi_write.py",
+            ],
+        )
+
+        spi_reader = (examples / "flash_spi_read.py").read_text()
+        self.assertIn("import hardware.SPI as spi_flash", spi_reader)
+        self.assertIn("spi_flash.flash_byte_io(dq1, op, address", spi_reader)
+        self.assertIn("board_qspi.QspiDQ0_T = 0", spi_reader)
+        self.assertIn("board_qspi.QspiDQ1_T = 1", spi_reader)
+
+        dspi_reader = (examples / "flash_dspi_read.py").read_text()
+        self.assertIn("import hardware.DSPI as dspi_flash", dspi_reader)
+        self.assertIn("dq: uint2_t = concat(board_qspi.QspiDQ1_I, board_qspi.QspiDQ0_I)", dspi_reader)
+        self.assertIn("board_leds.LD12 = page.dspi_activity", dspi_reader)
+
+        spi_rw = (examples / "flash_spi_write.py").read_text()
+        self.assertIn("import hardware.SPI as spi_flash", spi_rw)
+        self.assertIn("spi_flash.FLASH_OP_ERASE_BLOCK", spi_rw)
+        self.assertIn("spi_flash.FLASH_OP_PROGRAM", spi_rw)
+        self.assertIn("board_qspi.QspiDQ1_T = 1", spi_rw)
+
+    def test_flash_qspi_read_uses_raw_ff_terminated_text(self):
+        reader = (ROOT / "examples" / "flash_qspi_read.py").read_text()
         self.assertIn("import hardware.QSPI as qspi_flash", reader)
-        self.assertIn("_TEXT_SECTOR_ADDRESS = 0x3E0000", reader)
-        self.assertIn("_TEXT_DATA_ADDRESS = _TEXT_SECTOR_ADDRESS + 6", reader)
-        self.assertIn("_MAGIC = 0x45524452", reader)
+        self.assertIn("_TEXT_ADDRESS = 0x3E0000", reader)
+        self.assertIn("_TEXT_MAX_LENGTH = 65535", reader)
+        self.assertIn("_TEXT_LAST_POSITION = _TEXT_MAX_LENGTH - 4", reader)
         self.assertIn("qspi_flash.flash_byte_io", reader)
         self.assertIn("qspi_flash.FLASH_OP_READ", reader)
-        self.assertIn("_ST_HEADER_READY", reader)
-        self.assertIn("_ST_HEADER_LAUNCH", reader)
-        self.assertIn("_ST_HEADER_WAIT", reader)
-        self.assertIn("_ST_WINDOW_READY", reader)
-        self.assertIn("_ST_WINDOW_LAUNCH", reader)
-        self.assertIn("_ST_WINDOW_WAIT", reader)
+        self.assertIn("flash.read_data == 255", reader)
+        self.assertIn("byte_index = 4", reader)
+        self.assertIn("can_move_right = flash.read_data != 255", reader)
+        self.assertNotIn("_MAGIC", reader)
+        self.assertNotIn("_ST_HEADER", reader)
+        self.assertNotIn("header_length", reader)
         self.assertNotIn("tx_shift", reader)
         self.assertNotIn("wake_shift", reader)
 
-        demo = (ROOT / "examples" / "qspi_ereader.py").read_text()
-        self.assertIn("board_buttons.BTNL", demo)
-        self.assertIn("board_buttons.BTNR", demo)
-        self.assertIn("read_text_window", demo)
-        self.assertIn("page.char0", demo)
-        self.assertIn("page.char3", demo)
-        self.assertIn("import hardware.buttons as button_hw", demo)
-        self.assertIn("left_button = button_hw.debounce_button(board_buttons.BTNL)", demo)
-        self.assertIn("right_button = button_hw.debounce_button(board_buttons.BTNR)", demo)
-        reader_call = "page = read_text_window(dq, left_button.pressed, right_button.pressed)"
-        self.assertIn("dq: uint4_t = concat(", demo)
-        self.assertIn(reader_call, demo)
-        self.assertIn("board_leds.LD15 = page.quad_enabled", demo)
-        self.assertIn("board_leds.LD12 = page.quad_activity", demo)
-        self.assertIn("board_leds.LD11 = page.busy", demo)
-        self.assertIn("board_seven_segment.CA = seg[0]", demo)
-        self.assertIn("board_seven_segment.CG = seg[6]", demo)
-
-    def test_qspi_ereader_image_packer_reserves_exactly_one_sector(self):
-        import importlib.util
-        path = ROOT / "examples" / "make_qspi_ereader_image.py"
-        spec = importlib.util.spec_from_file_location("qspi_ereader_image", path)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        image = module.build_image("Hello   world\nfrom FPGA")
-        self.assertEqual(len(image), 64 * 1024)
-        self.assertEqual(image[:4], b"ERDR")
-        length = int.from_bytes(image[4:6], "big")
-        self.assertEqual(image[6:6 + length], b"HELLO WORLD FROM FPGA")
-        self.assertEqual(image[6 + length:], b"\xff" * (len(image) - 6 - length))
+        self.assertIn("board_buttons.BTNL", reader)
+        self.assertIn("board_buttons.BTNR", reader)
+        self.assertIn("read_text_window", reader)
+        self.assertIn("page.char0", reader)
+        self.assertIn("page.char3", reader)
+        self.assertIn("import hardware.buttons as button_hw", reader)
+        self.assertIn("_button = button_hw.make_button()", reader)
+        self.assertIn("left_button = _button(board_buttons.BTNL)", reader)
+        self.assertIn("right_button = _button(board_buttons.BTNR)", reader)
+        self.assertIn("dq: uint4_t = concat(", reader)
+        self.assertIn("page = read_text_window(dq, left_button.repeat, right_button.repeat)", reader)
+        self.assertIn("board_leds.LD15 = page.quad_enabled", reader)
+        self.assertIn("board_leds.LD12 = page.quad_activity", reader)
+        self.assertIn("board_leds.LD11 = page.busy", reader)
+        self.assertIn("board_seven_segment.CA = seg[0]", reader)
+        self.assertIn("board_seven_segment.CG = seg[6]", reader)
+        self.assertIn("if ch >= 97 and ch <= 122:", reader)
+        self.assertIn("ch == 9 or ch == 10 or ch == 13", reader)
 
     def test_basys3_flash_layout_reserves_configuration_image(self):
         board = fpgatool.board_config("basys3")

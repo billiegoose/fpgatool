@@ -87,21 +87,43 @@ examples can double as reference designs for individual board features.
 | USB-UART bridge | Supported at 115200 baud by the reusable UART transport example. |
 | USB HID mouse through the PIC24 PS/2 bridge | Supported, including three buttons and IntelliMouse wheel negotiation. |
 | USB HID keyboard through the PIC24 PS/2 bridge | Deferred. The bridge recognized tested keyboards at attach time but did not forward keypress scan codes; see the investigation note below. |
-| 32-Mbit QSPI-capable configuration flash | Read and write support hardware-verified through the reusable `examples/hardware/qspi_flash.py` interface. The current fabric controller intentionally uses single-bit SPI: DQ0 is MOSI, DQ1 is MISO, and DQ2/DQ3 are held high. `examples/qspi_flash_id.py` reads JEDEC `01 02 15`; `examples/qspi_flash_rw.py` and the e-reader layer their application protocols over the generic arbitrary-address byte read/program and explicit 64 KiB erase operations. Physical Basys 3 testing verified generic erase, verified program, independent readback, and persistence. |
+| 32-Mbit QSPI configuration flash | SPI, dual-output SPI, and QSPI transports live in `examples/hardware/SPI.py`, `DSPI.py`, and `QSPI.py`, with shared protocol constants in `flash.py`. The example matrix makes the bus-width progression explicit: `flash_spi_read.py` and `flash_spi_write.py` use ordinary 1-1-1 SPI, `flash_dspi_read.py` uses 1-1-2 Dual Output Read, and `flash_qspi_read.py` plus `flash_qspi_write.py` use 1-1-4 reads and quad page program. Quad reads/writes and persistence are hardware-verified on Basys 3. |
 | Digital Pmod connectors | Planned; deliberately left out of the built-in-peripheral pass. |
+
+### Flash examples
+
+The flash examples intentionally keep the application behavior parallel so the transport differences are easy to compare:
+
+- `examples/flash_spi_read.py` — single-bit SPI reads.
+- `examples/flash_spi_write.py` — single-bit SPI read/erase/program persistence.
+- `examples/flash_dspi_read.py` — Dual Output Read (`0x3B`): command/address remain serial and payload data arrives two bits per clock. Program operations on this transport remain ordinary serial SPI, so there is no redundant `flash_dspi_write.py` demo.
+- `examples/flash_qspi_read.py` — Quad Output Read (`0x6B`), four payload bits per clock.
+- `examples/flash_qspi_write.py` — quad reads plus Quad Page Program (`0x32`).
+
+The three read demos consume the same raw text directly from the reserved flash sector. The first erased `0xFF` byte marks end-of-text; no image header or preprocessing utility is required. ASCII lower-case is rendered as upper-case on the seven-segment display, while tabs/newlines render as spaces.
 
 ### Flash persistent-number demo
 
 Build and persistently program the demo once:
 
 ```sh
-./fpgatool.sh build examples/qspi_flash_rw.py --comb
+./fpgatool.sh build examples/flash_qspi_write.py --comb
 ./fpgatool.sh program build/basys3/qspi_flash_rw/qspi_flash_rw.bit
 ```
 
-After the board boots, BTNU increments the four-digit decimal value, BTND decrements it, and BTNC saves it to the reserved final 64 KiB flash block. LD15 is on while the flash controller is busy, LD14 means a valid checked record is present, and LD13 means the most recent save verification failed. The demo contains its small application-specific record state machine directly in `examples/qspi_flash_rw.py` and uses `hardware/qspi_flash.py` for all flash transactions: each save explicitly erases the block, then programs and verifies the four record bytes through the generic interface.
+After the board boots, BTNU increments the four-digit decimal value, BTND decrements it, and BTNC saves it to the reserved final 64 KiB flash block. The buttons use the shared synchronized/debounced `examples/hardware/buttons.py` input block. LD15 means QUAD mode is enabled, LD12 proves a four-lane read payload has occurred, LD10 proves a four-lane page-program payload has occurred, LD14 means a valid checked record is present, LD13 reports a save/readback error, and LD11 is flash busy.
 
-Persistence is hardware-verified on Basys 3: choose a recognizable number, press BTNC, wait for LD15 to turn off, and then power-cycle the board without running `fpgatool program` again. The same number is restored at boot. Cold-boot recovery and the physical SPI transaction machinery are centralized in `hardware/qspi_flash.py`; example-specific record and text-layout logic stays in the top-level examples.
+Persistence is hardware-verified on Basys 3: choose a recognizable number, press BTNC, wait for LD11 to turn off, and then power-cycle the board without running `fpgatool program` again. The same number is restored at boot. Cold-boot recovery and QSPI transactions are centralized in `examples/hardware/QSPI.py`; the demo keeps only its small application-specific record state machine.
+
+### Flash read demos
+
+The SPI, DSPI, and QSPI read demos all display four characters at a time from raw text stored at flash offset `0x3e0000`. Program an ordinary text file directly; `program-data` erases the touched 64 KiB flash block, so the erased `0xFF` byte immediately after the file naturally terminates the document:
+
+```sh
+./fpgatool.sh program-data book.txt --offset 0x3e0000
+```
+
+Then build/load any of `examples/flash_spi_read.py`, `examples/flash_dspi_read.py`, or `examples/flash_qspi_read.py` to compare 1-bit, 2-bit, and 4-bit payload reads over the same content. Text may be at most 65,535 bytes so one erased terminator byte remains in the reserved sector.
 | XADC / analog Pmod connector | Planned. |
 | JTAG user logic | Optional future infrastructure. The physical JTAG port is primarily for configuration/debug, but 7-series `BSCANE2` can expose USER scan chains to fabric for a private host<->FPGA control/debug channel. |
 | USB thumb-drive programming | Board configuration facility handled by the PIC24, not a normal user-fabric mass-storage peripheral. |

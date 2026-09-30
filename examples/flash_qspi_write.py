@@ -21,6 +21,8 @@ import fpgatool_board.basys3.seven_segment as board_seven_segment
 import hardware.QSPI as qspi_flash
 import hardware.buttons as button_hw
 
+_button = button_hw.make_button()
+
 
 def _hex_segments(value: uint4_t) -> uint7_t:
     segments: uint7_t = 127
@@ -299,13 +301,13 @@ def persistent_bcd_store(
 
 
 @MAIN(100.0)
-def qspi_flash_rw():
+def flash_qspi_write():
     display_value: Reg[uint16_t] = 0
     boot_loaded: Reg[uint1_t] = 0
 
-    up_button = button_hw.debounce_button(board_buttons.BTNU)
-    down_button = button_hw.debounce_button(board_buttons.BTND)
-    center_button = button_hw.debounce_button(board_buttons.BTNC)
+    up_button = _button(board_buttons.BTNU)
+    down_button = _button(board_buttons.BTND)
+    center_button = _button(board_buttons.BTNC)
 
     dq: uint4_t = concat(
         board_qspi.QspiDQ3_I, board_qspi.QspiDQ2_I,
