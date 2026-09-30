@@ -1,0 +1,7 @@
+{
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/.fpgatool/cache/PipelineC/src",
+        "${workspaceFolder}/.fpgatool/cache/PipelineC/include",
+        "${workspaceFolder}/.fpgatool/cache/PipelineC/include/pypeline"
+    ]
+}
