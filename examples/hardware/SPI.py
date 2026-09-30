@@ -1,5 +1,5 @@
 # pyright: reportInvalidTypeForm=none
-"""Board-agnostic single-SPI helpers for configuration flash.
+"""Single-bit SPI transport for configuration flash.
 
 ``read_jedec_id`` is the original read-only hardware diagnostic. ``flash_byte_io``
 adds reusable arbitrary-address byte reads, verified byte programming, and
@@ -8,6 +8,12 @@ DQ2 (WP#) and DQ3 (HOLD#/RESET#) are held high.
 """
 
 from pypeline import *
+from hardware.flash import (
+    FLASH_OP_NONE,
+    FLASH_OP_READ,
+    FLASH_OP_PROGRAM,
+    FLASH_OP_ERASE_BLOCK,
+)
 
 
 _HALF_PERIOD_CYCLES = 10  # 100 MHz / (2 * 10) = 5 MHz SCK.
@@ -302,10 +308,6 @@ class qspi_flash_byte_io_t(NamedTuple):
     error: uint1_t
 
 
-FLASH_OP_NONE = 0
-FLASH_OP_READ = 1
-FLASH_OP_PROGRAM = 2
-FLASH_OP_ERASE_BLOCK = 3
 
 
 @hw_func

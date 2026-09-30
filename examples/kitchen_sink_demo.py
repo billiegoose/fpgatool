@@ -18,6 +18,7 @@ import fpgatool_board.basys3.uart as board_uart
 import fpgatool_board.basys3.vga as board_vga
 import fpgatool_board.basys3.ps2 as board_ps2
 import hardware.led_chaser as led_hw
+import hardware.buttons as button_hw
 import hardware.uart as uart_hw
 import hardware.vga_timing as vga_timing
 import hardware.vga_test_bars as vga_bars
@@ -45,13 +46,19 @@ def write_vga_pins(px: vga_12bpp_t):
 
 @MAIN(100.0)
 def kitchen_sink_demo():
+    left_button = button_hw.debounce_button(board_buttons.BTNL)
+    right_button = button_hw.debounce_button(board_buttons.BTNR)
+    up_button = button_hw.debounce_button(board_buttons.BTNU)
+    down_button = button_hw.debounce_button(board_buttons.BTND)
+    center_button = button_hw.debounce_button(board_buttons.BTNC)
+
     user = led_hw.led_chaser(
         board_switches.SW0, board_switches.SW1, board_switches.SW2, board_switches.SW3,
         board_switches.SW4, board_switches.SW5, board_switches.SW6, board_switches.SW7,
         board_switches.SW8, board_switches.SW9, board_switches.SW10, board_switches.SW11,
         board_switches.SW12, board_switches.SW13, board_switches.SW14, board_switches.SW15,
-        board_buttons.BTNL, board_buttons.BTNR, board_buttons.BTNU,
-        board_buttons.BTND, board_buttons.BTNC,
+        left_button.level, right_button.level, up_button.level,
+        down_button.level, center_button.level,
     )
 
     board_leds.LD0 = user.ld0

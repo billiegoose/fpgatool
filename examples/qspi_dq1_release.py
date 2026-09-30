@@ -18,12 +18,17 @@ def qspi_dq1_release():
     # Keep the flash completely deselected.  STARTUPE2 is still instantiated so
     # the design exercises the same configuration-resource ownership as the SPI
     # examples, but CCLK remains low.
-    board_qspi.QspiCSn = board_qspi.drive_clock_and_cs(0, 1, board_qspi.QspiDQ1)
-    board_qspi.QspiDQ0 = 0
-    board_qspi.QspiDQ2 = 1
-    board_qspi.QspiDQ3 = 1
+    board_qspi.QspiCSn = board_qspi.drive_clock_and_cs(0, 1, board_qspi.QspiDQ1_I)
+    board_qspi.QspiDQ0_O = 0
+    board_qspi.QspiDQ0_T = 0
+    board_qspi.QspiDQ1_O = 0
+    board_qspi.QspiDQ1_T = 1
+    board_qspi.QspiDQ2_O = 1
+    board_qspi.QspiDQ2_T = 0
+    board_qspi.QspiDQ3_O = 1
+    board_qspi.QspiDQ3_T = 0
 
-    board_leds.LD0 = board_qspi.QspiDQ1
+    board_leds.LD0 = board_qspi.QspiDQ1_I
     board_leds.LD1 = 0
     board_leds.LD2 = 0
     board_leds.LD3 = 0

@@ -8,7 +8,8 @@ import fpgatool_board.basys3.qspi as board_qspi
 import fpgatool_board.basys3.buttons as board_buttons
 import fpgatool_board.basys3.leds as board_leds
 import fpgatool_board.basys3.seven_segment as board_seven_segment
-import hardware.qspi_flash as qspi_flash
+import hardware.QSPI as qspi_flash
+import hardware.buttons as button_hw
 
 
 def _glyph(ch: uint8_t) -> uint7_t:
@@ -77,8 +78,13 @@ class qspi_text_window_t(NamedTuple):
     cclk: uint1_t
     cs_n: uint1_t
     dq0: uint1_t
+    dq0_t: uint1_t
+    dq1: uint1_t
+    dq1_t: uint1_t
     dq2: uint1_t
+    dq2_t: uint1_t
     dq3: uint1_t
+    dq3_t: uint1_t
     char0: uint8_t
     char1: uint8_t
     char2: uint8_t
@@ -88,10 +94,12 @@ class qspi_text_window_t(NamedTuple):
     valid: uint1_t
     busy: uint1_t
     error: uint1_t
+    quad_enabled: uint1_t
+    quad_activity: uint1_t
 
 
 @hw_func
-def read_text_window(dq1: uint1_t, move_left: uint1_t, move_right: uint1_t) -> qspi_text_window_t:
+def read_text_window(dq: uint4_t, move_left: uint1_t, move_right: uint1_t) -> qspi_text_window_t:
     state: Reg[uint3_t] = _ST_HEADER_READY
     byte_index: Reg[uint3_t] = 0
 
@@ -116,7 +124,7 @@ def read_text_window(dq1: uint1_t, move_left: uint1_t, move_right: uint1_t) -> q
         op = qspi_flash.FLASH_OP_READ
         address = uint32_t(_TEXT_DATA_ADDRESS) + position + byte_index
 
-    flash = qspi_flash.flash_byte_io(dq1, op, address, uint8_t(0))
+    flash = qspi_flash.flash_byte_io(dq, op, address, uint8_t(0))
 
     if state == _ST_HEADER_READY:
         if flash.ready:
@@ -195,8 +203,13 @@ def read_text_window(dq1: uint1_t, move_left: uint1_t, move_right: uint1_t) -> q
         cclk=flash.cclk,
         cs_n=flash.cs_n,
         dq0=flash.dq0,
+        dq0_t=flash.dq0_t,
+        dq1=flash.dq1,
+        dq1_t=flash.dq1_t,
         dq2=flash.dq2,
+        dq2_t=flash.dq2_t,
         dq3=flash.dq3,
+        dq3_t=flash.dq3_t,
         char0=char0,
         char1=char1,
         char2=char2,
@@ -206,58 +219,33 @@ def read_text_window(dq1: uint1_t, move_left: uint1_t, move_right: uint1_t) -> q
         valid=valid,
         busy=busy,
         error=error,
+        quad_enabled=flash.quad_enabled,
+        quad_activity=flash.quad_activity,
     )
 
 
 @MAIN(100.0)
 def qspi_ereader():
-    # Debounce each physical button into a stable state, then publish a
-    # registered one-cycle pulse only when that stable state changes to
-    # pressed.  The reader consumes the *current* pulse registers before we
-    # compute their next values below, avoiding a combinational button/event
-    # path into the stateful QSPI reader.
-    left_stable: Reg[uint1_t] = 0
-    right_stable: Reg[uint1_t] = 0
-    left_count: Reg[uint21_t] = 0
-    right_count: Reg[uint21_t] = 0
-    left_event: Reg[uint1_t] = 0
-    right_event: Reg[uint1_t] = 0
     scan: Reg[uint18_t] = 0
 
-    page = read_text_window(board_qspi.QspiDQ1, left_event, right_event)
+    left_button = button_hw.debounce_button(board_buttons.BTNL)
+    right_button = button_hw.debounce_button(board_buttons.BTNR)
 
-    left_now: uint1_t = board_buttons.BTNL
-    right_now: uint1_t = board_buttons.BTNR
-
-    # Pulses are one clock wide.  A newly confirmed press is therefore seen
-    # by read_text_window on the following clock, after which it is cleared.
-    left_event = 0
-    right_event = 0
-
-    if left_now == left_stable:
-        left_count = 0
-    elif left_count >= 1_999_999:
-        left_count = 0
-        left_stable = left_now
-        if left_now:
-            left_event = 1
-    else:
-        left_count = left_count + 1
-
-    if right_now == right_stable:
-        right_count = 0
-    elif right_count >= 1_999_999:
-        right_count = 0
-        right_stable = right_now
-        if right_now:
-            right_event = 1
-    else:
-        right_count = right_count + 1
+    dq: uint4_t = concat(
+        board_qspi.QspiDQ3_I, board_qspi.QspiDQ2_I,
+        board_qspi.QspiDQ1_I, board_qspi.QspiDQ0_I
+    )
+    page = read_text_window(dq, left_button.pressed, right_button.pressed)
 
     board_qspi.QspiCSn = board_qspi.drive_clock_and_cs(page.cclk, page.cs_n, not page.busy)
-    board_qspi.QspiDQ0 = page.dq0
-    board_qspi.QspiDQ2 = page.dq2
-    board_qspi.QspiDQ3 = page.dq3
+    board_qspi.QspiDQ0_O = page.dq0
+    board_qspi.QspiDQ0_T = page.dq0_t
+    board_qspi.QspiDQ1_O = page.dq1
+    board_qspi.QspiDQ1_T = page.dq1_t
+    board_qspi.QspiDQ2_O = page.dq2
+    board_qspi.QspiDQ2_T = page.dq2_t
+    board_qspi.QspiDQ3_O = page.dq3
+    board_qspi.QspiDQ3_T = page.dq3_t
 
     scan = scan + 1
     digit: uint2_t = scan[17:16]
@@ -302,8 +290,11 @@ def qspi_ereader():
     board_leds.LD8 = 0
     board_leds.LD9 = 0
     board_leds.LD10 = 0
-    board_leds.LD11 = 0
-    board_leds.LD12 = 0
+    board_leds.LD11 = page.busy
+    # Hardware proof indicators:
+    #   LD15 = the flash Configuration Register reports QUAD enabled.
+    #   LD12 = sticky flag set only after a 4-bit QSPI payload nibble was sampled.
+    board_leds.LD12 = page.quad_activity
     board_leds.LD13 = page.error
     board_leds.LD14 = page.valid
-    board_leds.LD15 = page.busy
+    board_leds.LD15 = page.quad_enabled

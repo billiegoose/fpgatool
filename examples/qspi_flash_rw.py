@@ -18,7 +18,8 @@ import fpgatool_board.basys3.qspi as board_qspi
 import fpgatool_board.basys3.buttons as board_buttons
 import fpgatool_board.basys3.leds as board_leds
 import fpgatool_board.basys3.seven_segment as board_seven_segment
-import hardware.qspi_flash as qspi_flash
+import hardware.QSPI as qspi_flash
+import hardware.buttons as button_hw
 
 
 def _hex_segments(value: uint4_t) -> uint7_t:
@@ -118,18 +119,26 @@ class qspi_flash_store_t(NamedTuple):
     cclk: uint1_t
     cs_n: uint1_t
     dq0: uint1_t
+    dq0_t: uint1_t
+    dq1: uint1_t
+    dq1_t: uint1_t
     dq2: uint1_t
+    dq2_t: uint1_t
     dq3: uint1_t
+    dq3_t: uint1_t
     value_bcd: uint16_t
     valid: uint1_t
     busy: uint1_t
     save_done: uint1_t
     save_error: uint1_t
+    quad_enabled: uint1_t
+    quad_activity: uint1_t
+    quad_write_activity: uint1_t
 
 
 @hw_func
 def persistent_bcd_store(
-    dq1: uint1_t, save: uint1_t, value_to_save: uint16_t
+    dq: uint4_t, save: uint1_t, value_to_save: uint16_t
 ) -> qspi_flash_store_t:
     state: Reg[uint4_t] = _ST_BOOT_READY
     byte_index: Reg[uint3_t] = 0
@@ -169,7 +178,7 @@ def persistent_bcd_store(
         else:
             write_data = check
 
-    flash = qspi_flash.flash_byte_io(dq1, op, address, write_data)
+    flash = qspi_flash.flash_byte_io(dq, op, address, write_data)
 
     if state == _ST_BOOT_READY:
         if flash.ready:
@@ -271,13 +280,21 @@ def persistent_bcd_store(
         cclk=flash.cclk,
         cs_n=flash.cs_n,
         dq0=flash.dq0,
+        dq0_t=flash.dq0_t,
+        dq1=flash.dq1,
+        dq1_t=flash.dq1_t,
         dq2=flash.dq2,
+        dq2_t=flash.dq2_t,
         dq3=flash.dq3,
+        dq3_t=flash.dq3_t,
         value_bcd=stored_value,
         valid=stored_valid,
         busy=busy,
         save_done=save_done,
         save_error=save_error,
+        quad_enabled=flash.quad_enabled,
+        quad_activity=flash.quad_activity,
+        quad_write_activity=flash.quad_write_activity,
     )
 
 
@@ -286,33 +303,15 @@ def qspi_flash_rw():
     display_value: Reg[uint16_t] = 0
     boot_loaded: Reg[uint1_t] = 0
 
-    up_prev: Reg[uint1_t] = 0
-    down_prev: Reg[uint1_t] = 0
-    center_prev: Reg[uint1_t] = 0
-    debounce: Reg[uint22_t] = 0
+    up_button = button_hw.debounce_button(board_buttons.BTNU)
+    down_button = button_hw.debounce_button(board_buttons.BTND)
+    center_button = button_hw.debounce_button(board_buttons.BTNC)
 
-    up_event: uint1_t = 0
-    down_event: uint1_t = 0
-    save_event: uint1_t = 0
-
-    if debounce > 0:
-        debounce = debounce - 1
-    else:
-        if board_buttons.BTNU and not up_prev:
-            up_event = 1
-            debounce = 2_000_000
-        elif board_buttons.BTND and not down_prev:
-            down_event = 1
-            debounce = 2_000_000
-        elif board_buttons.BTNC and not center_prev:
-            save_event = 1
-            debounce = 2_000_000
-
-    up_prev = board_buttons.BTNU
-    down_prev = board_buttons.BTND
-    center_prev = board_buttons.BTNC
-
-    flash = persistent_bcd_store(board_qspi.QspiDQ1, save_event, display_value)
+    dq: uint4_t = concat(
+        board_qspi.QspiDQ3_I, board_qspi.QspiDQ2_I,
+        board_qspi.QspiDQ1_I, board_qspi.QspiDQ0_I
+    )
+    flash = persistent_bcd_store(dq, center_button.pressed, display_value)
 
     # USRCCLKTS is active-high. Keep CCLK enabled while the flash controller is
     # busy and tri-state it when idle; importantly, this is a routed fabric
@@ -320,9 +319,14 @@ def qspi_flash_rw():
     board_qspi.QspiCSn = board_qspi.drive_clock_and_cs(
         flash.cclk, flash.cs_n, not flash.busy
     )
-    board_qspi.QspiDQ0 = flash.dq0
-    board_qspi.QspiDQ2 = flash.dq2
-    board_qspi.QspiDQ3 = flash.dq3
+    board_qspi.QspiDQ0_O = flash.dq0
+    board_qspi.QspiDQ0_T = flash.dq0_t
+    board_qspi.QspiDQ1_O = flash.dq1
+    board_qspi.QspiDQ1_T = flash.dq1_t
+    board_qspi.QspiDQ2_O = flash.dq2
+    board_qspi.QspiDQ2_T = flash.dq2_t
+    board_qspi.QspiDQ3_O = flash.dq3
+    board_qspi.QspiDQ3_T = flash.dq3_t
 
     if not boot_loaded and not flash.busy:
         if flash.valid:
@@ -331,12 +335,16 @@ def qspi_flash_rw():
             display_value = 0
         boot_loaded = 1
     elif boot_loaded and not flash.busy:
-        if up_event:
+        if up_button.pressed:
             display_value = _bcd_increment(display_value)
-        elif down_event:
+        elif down_button.pressed:
             display_value = _bcd_decrement(display_value)
 
-    # LD15 = flash busy, LD14 = saved record valid, LD13 = last save failed.
+    # Hardware proof indicators:
+    #   LD15 = QUAD enable read back successfully.
+    #   LD12 = sticky proof of an actual four-lane read payload.
+    #   LD10 = sticky proof of an actual four-lane program payload.
+    #   LD14 = saved record valid, LD13 = save/readback error, LD11 = busy.
     board_leds.LD0 = 0
     board_leds.LD1 = 0
     board_leds.LD2 = 0
@@ -347,12 +355,12 @@ def qspi_flash_rw():
     board_leds.LD7 = 0
     board_leds.LD8 = 0
     board_leds.LD9 = 0
-    board_leds.LD10 = 0
-    board_leds.LD11 = 0
-    board_leds.LD12 = 0
+    board_leds.LD10 = flash.quad_write_activity
+    board_leds.LD11 = flash.busy
+    board_leds.LD12 = flash.quad_activity
     board_leds.LD13 = flash.save_error
     board_leds.LD14 = flash.valid
-    board_leds.LD15 = flash.busy
+    board_leds.LD15 = flash.quad_enabled
 
     scan_counter: Reg[uint16_t] = 0
     scan_counter = scan_counter + 1

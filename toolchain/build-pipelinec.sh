@@ -41,7 +41,27 @@ export FPGATOOL_FINAL_TOP_VHDL="$out_dir/pipelinec/top/top.vhd"
 
 # The source lives outside PipelineC, so make its reusable Pypeline library and
 # board modules importable without making host PYTHONPATH part of the contract.
-export PYTHONPATH="$pipelinec_dir/include/pypeline${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$pipelinec_dir/src:$pipelinec_dir/include/pypeline${PYTHONPATH:+:$PYTHONPATH}"
+
+# PipelineC currently treats @final(syn) as one-shot even though a --comb
+# synthesis build rewrites the final top after its throughput sweep.  Board
+# boundary hooks (PS/2, QSPI) must therefore run again on the regenerated
+# top.vhd immediately before final implementation.  Keep the pinned compiler
+# checkout read-only: patch only a per-build driver copy.
+pipelinec_driver="$out_dir/pipelinec-driver.py"
+cp "$pipelinec_dir/src/pipelinec" "$pipelinec_driver"
+"$FPGA_TOOL_PIPELINEC_PYTHON" - "$pipelinec_driver" <<'PYDRIVER'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = 'if _syn_final_hooks_ran or not src_file.endswith(".py"):'
+new = 'if not src_file.endswith(".py"):'
+if text.count(old) != 1:
+    raise SystemExit(f"expected one PipelineC final-hook guard, found {text.count(old)}")
+path.write_text(text.replace(old, new, 1))
+PYDRIVER
 
 pipelinec_args=(
   "$source_file"
@@ -56,7 +76,7 @@ pipelinec_args+=(
   --out_dir "$out_dir/pipelinec"
 )
 
-"$FPGA_TOOL_PIPELINEC_PYTHON" "$pipelinec_dir/src/pipelinec" "${pipelinec_args[@]}"
+"$FPGA_TOOL_PIPELINEC_PYTHON" "$pipelinec_driver" "${pipelinec_args[@]}"
 
 # OpenXC7 compatibility workaround for the Basys 3 configuration-flash SO pin.
 # Legacy nextpnr-xilinx accepts the XDC PULLUP constraint but can emit
