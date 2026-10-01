@@ -3,19 +3,19 @@
 
 from pypeline import *
 from vga.types import vga_12bpp_t
-from vga.timing import make_vga_timing, VgaTimingSpec
+from vga.timing import make_vga_timing, VGA_800_600
 import fpgatool_board.basys3.part35t
 import fpgatool_board.basys3.vga as board_vga
 import hardware.vga_test_bars as bars
+from hardware.xilinx7_clock import MmcmStage, make_mmcm_clock, synchronize_clock_lock
 
-VGA_800_600_50 = VgaTimingSpec(800, 600, 40, 128, 1056, 1, 4, 628, 1, 1, 50.0)
-vga_timing = make_vga_timing(VGA_800_600_50)
-_test_bars = bars.make_vga_test_bars(VGA_800_600_50)
-_MAIN_CLK_MHZ = 100.0
-_PIXEL_DIV = int(_MAIN_CLK_MHZ / vga_timing.pixel_clk_mhz)
-if _MAIN_CLK_MHZ != (_PIXEL_DIV * vga_timing.pixel_clk_mhz):
-    raise ValueError("VGA pixel clock must divide the demo MAIN clock exactly")
-_pixel_phase_t = make_uint_t(max(1, (_PIXEL_DIV - 1).bit_length()))
+vga_timing = make_vga_timing(VGA_800_600)
+_test_bars = bars.make_vga_test_bars(VGA_800_600)
+# 100 MHz input -> 800 MHz VCO -> 40 MHz pixel clock.
+_pixel_clock_generator = make_mmcm_clock(100.0, MmcmStage(8, 1, 20))
+assert _pixel_clock_generator.output_mhz == vga_timing.pixel_clk_mhz
+pixel_clock: Wire[uint1_t] = make_clock(_pixel_clock_generator.output_mhz)
+pixel_locked: AsyncWire[uint1_t]
 
 
 @hw_func
@@ -36,16 +36,18 @@ def write_vga_pins(px: vga_12bpp_t):
     board_vga.VGA_VS = px.vs
 
 
-@MAIN(_MAIN_CLK_MHZ)
+@MAIN(100.0)
+def vga_pixel_clock():
+    signals = _pixel_clock_generator(0)
+    pixel_clock = signals.clock
+    pixel_locked = signals.locked
+
+
+@MAIN(vga_timing.pixel_clk_mhz)
 def vga_800_600_test_bars():
-    pixel_phase: Reg[_pixel_phase_t] = 0
     px: Reg[vga_12bpp_t]
 
-    if pixel_phase == (_PIXEL_DIV - 1):
-        pixel_phase = 0
+    if synchronize_clock_lock(pixel_locked):
         sig = vga_timing()
         px = _test_bars(sig)
-    else:
-        pixel_phase = pixel_phase + 1
-
     write_vga_pins(px)
