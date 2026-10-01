@@ -2,6 +2,7 @@
 """Reusable board-agnostic VGA mouse cursor renderer."""
 
 from pypeline import *
+from vga.timing import VGA_640_480, VgaTimingSpec
 from vga.types import vga_timing_signals_t, vga_12bpp_t
 
 
@@ -10,63 +11,72 @@ def black_background(sig: vga_timing_signals_t) -> vga_12bpp_t:
     return vga_12bpp_t(r=0, g=0, b=0, hs=sig.hsync, vs=sig.vsync)
 
 
-@hw_func
-def overlay_cursor(
-    sig: vga_timing_signals_t,
-    bg: vga_12bpp_t,
-    mouse_x: uint10_t,
-    mouse_y: uint9_t,
-    mouse_left: uint1_t,
-    mouse_middle: uint1_t,
-    mouse_right: uint1_t,
-    mouse_wheel: uint8_t,
-    mouse_wheel_mode: uint1_t,
-) -> vga_12bpp_t:
-    r: uint4_t = bg.r
-    g: uint4_t = bg.g
-    b: uint4_t = bg.b
+def make_mouse_cursor(spec: VgaTimingSpec):
+    """Create a cursor renderer for the frame's coordinate range."""
+    _MAX_CURSOR_X = spec.frame_width - 1
 
-    if sig.active:
-        cursor_x: uint10_t = mouse_x
-        cursor_y: uint9_t = mouse_y
-        if cursor_x > 637:
-            cursor_x = 637
-        if cursor_y == 0:
-            cursor_y = 1
+    @hw_func
+    def overlay_cursor(
+        sig: vga_timing_signals_t,
+        bg: vga_12bpp_t,
+        mouse_x: uint12_t,
+        mouse_y: uint12_t,
+        mouse_left: uint1_t,
+        mouse_middle: uint1_t,
+        mouse_right: uint1_t,
+        mouse_wheel: uint8_t,
+        mouse_wheel_mode: uint1_t,
+    ) -> vga_12bpp_t:
+        r: uint4_t = bg.r
+        g: uint4_t = bg.g
+        b: uint4_t = bg.b
 
-        dx: uint10_t = 0
-        dy: uint10_t = 0
-        if sig.pos.x >= cursor_x:
-            dx = sig.pos.x - cursor_x
-        else:
-            dx = cursor_x - sig.pos.x
-        if sig.pos.y >= cursor_y:
-            dy = sig.pos.y - cursor_y
-        else:
-            dy = cursor_y - sig.pos.y
+        if sig.active:
+            cursor_x: uint12_t = mouse_x
+            cursor_y: uint12_t = mouse_y
+            if cursor_x > _MAX_CURSOR_X:
+                cursor_x = _MAX_CURSOR_X
+            # Keep the cursor center on the requested edge pixel. The active
+            # video window clips any arms extending beyond the frame.
 
-        outline = (((dx <= 1) & (dy <= 7)) | ((dy <= 1) & (dx <= 7)))
-        core = (((dx == 0) & (dy <= 6)) | ((dy == 0) & (dx <= 6)))
-
-        if outline:
-            r = 0
-            g = 0
-            b = 0
-        if core:
-            any_button: uint1_t = mouse_left | mouse_middle | mouse_right
-            if any_button:
-                r = 15 if mouse_left else 0
-                g = 15 if mouse_middle else 0
-                b = 15 if mouse_right else 0
+            dx: uint12_t = 0
+            dy: uint12_t = 0
+            if sig.pos.x >= cursor_x:
+                dx = sig.pos.x - cursor_x
             else:
-                r = 15
-                g = 15
-                b = 15
+                dx = cursor_x - sig.pos.x
+            if sig.pos.y >= cursor_y:
+                dy = sig.pos.y - cursor_y
+            else:
+                dy = cursor_y - sig.pos.y
 
-        wheel_phase: uint2_t = mouse_wheel[1:0]
-        if mouse_wheel_mode & (dx == 0) & (dy == wheel_phase):
-            r = 0
-            g = 0
-            b = 0
+            outline = (((dx <= 1) & (dy <= 7)) | ((dy <= 1) & (dx <= 7)))
+            core = (((dx == 0) & (dy <= 6)) | ((dy == 0) & (dx <= 6)))
 
-    return vga_12bpp_t(r=r, g=g, b=b, hs=bg.hs, vs=bg.vs)
+            if outline:
+                r = 0
+                g = 0
+                b = 0
+            if core:
+                any_button: uint1_t = mouse_left | mouse_middle | mouse_right
+                if any_button:
+                    r = 15 if mouse_left else 0
+                    g = 15 if mouse_middle else 0
+                    b = 15 if mouse_right else 0
+                else:
+                    r = 15
+                    g = 15
+                    b = 15
+
+            wheel_phase: uint2_t = mouse_wheel[1:0]
+            if mouse_wheel_mode & (dx == 0) & (dy == wheel_phase):
+                r = 0
+                g = 0
+                b = 0
+
+        return vga_12bpp_t(r=r, g=g, b=b, hs=bg.hs, vs=bg.vs)
+
+    return overlay_cursor
+
+
+overlay_cursor = make_mouse_cursor(VGA_640_480)

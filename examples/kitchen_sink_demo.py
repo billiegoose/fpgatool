@@ -9,7 +9,7 @@ simultaneously. Top-level examples own pins; reusable logic lives under
 
 from pypeline import *
 from vga.types import vga_12bpp_t
-from vga.timing import make_vga_timing, VGA_640_480
+from vga.timing import make_vga_timing, VGA_1920_1080
 import fpgatool_board.basys3.part35t
 import fpgatool_board.basys3.leds as board_leds
 import fpgatool_board.basys3.switches as board_switches
@@ -26,15 +26,22 @@ import hardware.uart as uart_hw
 import hardware.vga_test_bars as vga_bars
 import hardware.mouse_cursor as mouse_cursor
 import hardware.ps2_mouse as ps2_mouse_hw
+from hardware.xilinx7_clock import MmcmStage, make_mmcm_clock, synchronize_clock_lock
 
 
-vga_timing = make_vga_timing(VGA_640_480)
-_test_bars = vga_bars.make_vga_test_bars(VGA_640_480)
+vga_timing = make_vga_timing(VGA_1920_1080)
+_test_bars = vga_bars.make_vga_test_bars(VGA_1920_1080)
 _MAIN_CLK_MHZ = 100.0
-_PIXEL_DIV = int(_MAIN_CLK_MHZ / vga_timing.pixel_clk_mhz)
-if _MAIN_CLK_MHZ != (_PIXEL_DIV * vga_timing.pixel_clk_mhz):
-    raise ValueError("VGA pixel clock must divide the demo MAIN clock exactly")
-_pixel_phase_t = make_uint_t(max(1, (_PIXEL_DIV - 1).bit_length()))
+_pixel_clock_generator = make_mmcm_clock(_MAIN_CLK_MHZ, MmcmStage(27, 4, 5), MmcmStage(11, 2, 5))
+assert _pixel_clock_generator.output_mhz == vga_timing.pixel_clk_mhz
+pixel_clock: Wire[uint1_t] = make_clock(_pixel_clock_generator.output_mhz)
+pixel_locked: AsyncWire[uint1_t]
+_mouse = ps2_mouse_hw.make_ps2_mouse(
+    vga_timing.pixel_clk_mhz, VGA_1920_1080.frame_width, VGA_1920_1080.frame_height,
+)
+# Pipeline the complete pixel result, including sync, so overlay and background
+# stay aligned while meeting the 148.5 MHz pixel clock.
+_cursor = AUTO_PIPELINE(mouse_cursor.make_mouse_cursor(VGA_1920_1080), latency=2)
 
 
 @hw_func
@@ -57,11 +64,13 @@ def write_vga_pins(px: vga_12bpp_t):
 
 @MAIN(_MAIN_CLK_MHZ)
 def kitchen_sink_demo():
-    left_button = _button(board_buttons.BTNL)
-    right_button = _button(board_buttons.BTNR)
-    up_button = _button(board_buttons.BTNU)
-    down_button = _button(board_buttons.BTND)
-    center_button = _button(board_buttons.BTNC)
+    # Consume the previous cycle's debounced levels to break the long path
+    # through button debounce, chaser update, and seven-segment decoding.
+    left_button: Reg[button_hw.button_t]
+    right_button: Reg[button_hw.button_t]
+    up_button: Reg[button_hw.button_t]
+    down_button: Reg[button_hw.button_t]
+    center_button: Reg[button_hw.button_t]
 
     user = led_hw.led_chaser(
         board_switches.SW0, board_switches.SW1, board_switches.SW2, board_switches.SW3,
@@ -105,18 +114,36 @@ def kitchen_sink_demo():
     uart = uart_hw.uart_echo(board_uart.RsRx, uint8_t(0), uint8_t(0))
     board_uart.RsTx = uart.tx
 
-    pixel_phase: Reg[_pixel_phase_t] = 0
+    left_button = _button(board_buttons.BTNL)
+    right_button = _button(board_buttons.BTNR)
+    up_button = _button(board_buttons.BTNU)
+    down_button = _button(board_buttons.BTND)
+    center_button = _button(board_buttons.BTNC)
+
+
+
+@MAIN(_MAIN_CLK_MHZ)
+def vga_pixel_clock():
+    signals = _pixel_clock_generator(0)
+    pixel_clock = signals.clock
+    pixel_locked = signals.locked
+
+
+@MAIN(vga_timing.pixel_clk_mhz)
+def kitchen_sink_video():
     px: Reg[vga_12bpp_t]
 
-    mouse = ps2_mouse_hw.ps2_mouse(board_ps2.PS2Clk_I, board_ps2.PS2Data_I)
-    board_ps2.PS2Clk_T = mouse.clk_release
-    board_ps2.PS2Data_T = mouse.data_release
-
-    if pixel_phase == (_PIXEL_DIV - 1):
-        pixel_phase = 0
+    # Mouse and renderer share the pixel clock, so all coordinates and buttons
+    # are coherent without a clock-domain crossing. Release PS/2 until locked.
+    board_ps2.PS2Clk_T = 1
+    board_ps2.PS2Data_T = 1
+    if synchronize_clock_lock(pixel_locked):
+        mouse = _mouse(board_ps2.PS2Clk_I, board_ps2.PS2Data_I)
+        board_ps2.PS2Clk_T = mouse.clk_release
+        board_ps2.PS2Data_T = mouse.data_release
         sig = vga_timing()
         bg = _test_bars(sig)
-        px = mouse_cursor.overlay_cursor(
+        px = _cursor(
             sig,
             bg,
             mouse.x,
@@ -127,7 +154,5 @@ def kitchen_sink_demo():
             mouse.wheel,
             mouse.wheel_mode,
         )
-    else:
-        pixel_phase = pixel_phase + 1
 
     write_vga_pins(px)

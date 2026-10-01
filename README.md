@@ -71,6 +71,15 @@ as `build.log`, `load.log`, or `program.log` beside the design output. Pass
 
 Top-level `examples/*.py` files are complete board-facing designs: they own `@MAIN` entry points and physical board interfaces. Reusable, board-agnostic hardware functions live under `examples/hardware/` and contain neither `@MAIN` declarations nor `board.*` imports. `examples/kitchen_sink_demo.py` demonstrates composition by combining the LED/seven-segment chaser, UART echo, VGA test bars, and mouse cursor blocks in one design.
 
+The kitchen-sink demo outputs 1920x1080 at 60 Hz using the same 148.5 MHz
+MMCM chain as the standalone 1080p example. Video and PS/2 run in that pixel
+domain; buttons, LEDs, seven-segment display, and UART remain at 100 MHz.
+`make_ps2_mouse(clock_mhz, frame_width, frame_height)` scales the protocol
+timeouts and mouse bounds, while `make_mouse_cursor(spec)` renders across the
+full frame. The standalone mouse demo retains its 100 MHz, 640x480 defaults.
+The cursor renderer has two pipeline stages that delay RGB and sync together;
+debounced button levels are registered before driving the chaser logic.
+
 All VGA test-bar examples use the same `hardware.vga_test_bars` factory:
 
 ```python

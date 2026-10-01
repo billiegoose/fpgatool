@@ -19,7 +19,7 @@ class VgaCompilerTests(unittest.TestCase):
     def test_all_pattern_consumers_elaborate(self):
         examples = Path(__file__).resolve().parents[1] / "examples"
         for name in ("vga_test_bars.py", "vga_800_600_test_bars.py",
-                     "vga_1920_1080_test_bars.py", "kitchen_sink_demo.py"):
+                     "vga_1920_1080_test_bars.py", "kitchen_sink_demo.py", "mouse_demo.py"):
             with self.subTest(example=name), tempfile.TemporaryDirectory() as tmp:
                 SYN.SYN_OUTPUT_DIRECTORY = tmp
                 SYN.TOP_LEVEL_MODULE = "top"
