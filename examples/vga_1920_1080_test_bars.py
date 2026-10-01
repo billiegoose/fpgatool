@@ -6,10 +6,11 @@ from vga.types import vga_12bpp_t
 from vga.timing import make_vga_timing, VGA_1920_1080
 import fpgatool_board.basys3.part35t
 import fpgatool_board.basys3.vga as board_vga
-import hardware.vga_1920_1080_test_bars as bars
+import hardware.vga_test_bars as bars
 from hardware.xilinx7_clock import MmcmStage, make_mmcm_clock, synchronize_clock_lock
 
 vga_timing = make_vga_timing(VGA_1920_1080)
+_test_bars = bars.make_vga_test_bars(VGA_1920_1080)
 # Hardware-verified integer chain: 100 -> 135 -> 148.5 MHz.
 _pixel_clock_generator = make_mmcm_clock(100.0, MmcmStage(27, 4, 5), MmcmStage(11, 2, 5))
 assert _pixel_clock_generator.output_mhz == vga_timing.pixel_clk_mhz
@@ -48,5 +49,5 @@ def vga_1920_1080_test_bars():
 
     if synchronize_clock_lock(pixel_locked):
         sig = vga_timing()
-        px = bars.test_bars(sig)
+        px = _test_bars(sig)
     write_vga_pins(px)

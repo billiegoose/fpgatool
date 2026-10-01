@@ -10,6 +10,7 @@ import hardware.vga_test_bars as bars
 
 
 vga_timing = make_vga_timing(VGA_640_480)
+_test_bars = bars.make_vga_test_bars(VGA_640_480)
 _MAIN_CLK_MHZ = 100.0
 _PIXEL_DIV = int(_MAIN_CLK_MHZ / vga_timing.pixel_clk_mhz)
 if _MAIN_CLK_MHZ != (_PIXEL_DIV * vga_timing.pixel_clk_mhz):
@@ -43,7 +44,7 @@ def vga_test_bars():
     if pixel_phase == (_PIXEL_DIV - 1):
         pixel_phase = 0
         sig = vga_timing()
-        px = bars.test_bars(sig)
+        px = _test_bars(sig)
     else:
         pixel_phase = pixel_phase + 1
 

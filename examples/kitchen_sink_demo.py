@@ -29,6 +29,7 @@ import hardware.ps2_mouse as ps2_mouse_hw
 
 
 vga_timing = make_vga_timing(VGA_640_480)
+_test_bars = vga_bars.make_vga_test_bars(VGA_640_480)
 _MAIN_CLK_MHZ = 100.0
 _PIXEL_DIV = int(_MAIN_CLK_MHZ / vga_timing.pixel_clk_mhz)
 if _MAIN_CLK_MHZ != (_PIXEL_DIV * vga_timing.pixel_clk_mhz):
@@ -114,7 +115,7 @@ def kitchen_sink_demo():
     if pixel_phase == (_PIXEL_DIV - 1):
         pixel_phase = 0
         sig = vga_timing()
-        bg = vga_bars.test_bars(sig)
+        bg = _test_bars(sig)
         px = mouse_cursor.overlay_cursor(
             sig,
             bg,

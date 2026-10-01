@@ -6,10 +6,11 @@ from vga.types import vga_12bpp_t
 from vga.timing import make_vga_timing, VgaTimingSpec
 import fpgatool_board.basys3.part35t
 import fpgatool_board.basys3.vga as board_vga
-import hardware.vga_800_600_test_bars as bars
+import hardware.vga_test_bars as bars
 
 VGA_800_600_50 = VgaTimingSpec(800, 600, 40, 128, 1056, 1, 4, 628, 1, 1, 50.0)
 vga_timing = make_vga_timing(VGA_800_600_50)
+_test_bars = bars.make_vga_test_bars(VGA_800_600_50)
 _MAIN_CLK_MHZ = 100.0
 _PIXEL_DIV = int(_MAIN_CLK_MHZ / vga_timing.pixel_clk_mhz)
 if _MAIN_CLK_MHZ != (_PIXEL_DIV * vga_timing.pixel_clk_mhz):
@@ -43,7 +44,7 @@ def vga_800_600_test_bars():
     if pixel_phase == (_PIXEL_DIV - 1):
         pixel_phase = 0
         sig = vga_timing()
-        px = bars.test_bars(sig)
+        px = _test_bars(sig)
     else:
         pixel_phase = pixel_phase + 1
 

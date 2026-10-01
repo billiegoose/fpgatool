@@ -71,6 +71,18 @@ as `build.log`, `load.log`, or `program.log` beside the design output. Pass
 
 Top-level `examples/*.py` files are complete board-facing designs: they own `@MAIN` entry points and physical board interfaces. Reusable, board-agnostic hardware functions live under `examples/hardware/` and contain neither `@MAIN` declarations nor `board.*` imports. `examples/kitchen_sink_demo.py` demonstrates composition by combining the LED/seven-segment chaser, UART echo, VGA test bars, and mouse cursor blocks in one design.
 
+All VGA test-bar examples use the same `hardware.vga_test_bars` factory:
+
+```python
+vga_timing = make_vga_timing(spec)
+test_bars = make_vga_test_bars(spec)  # spec: VgaTimingSpec
+```
+
+Call `test_bars(sig)` on the timing generator's output. The factory derives
+frame dimensions and constant bar thresholds from `spec`; every mode uses the
+same corner markers, edge ticks, and center cross. The seven bars differ in
+width by at most one pixel, with blanking rendered black and sync passed through.
+
 ### 1920x1080 VGA test bars
 
 ```sh
