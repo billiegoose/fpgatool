@@ -59,7 +59,7 @@ class VgaTestBarsTests(unittest.TestCase):
                     self.assertEqual(self.pixel(draw, 10, 50, 0, hs, vs), (0, 0, 0))
                     self.assertEqual(self.pixel(draw, 10, height // 4, 1, hs, vs), self.COLORS[0])
 
-    def test_marker_edges_and_center_cross(self):
+    def test_marker_edges_and_center_x(self):
         for timing in self.MODES:
             width, height, marker = timing.frame_width, timing.frame_height, 5
             with self.subTest(width=width):
@@ -79,11 +79,13 @@ class VgaTestBarsTests(unittest.TestCase):
                     for x in (0, 4 * marker - 1, width - 4 * marker, width - 1):
                         self.assertEqual(self.pixel(draw, x, cy + dy), (0, 0, 0))
                 self.assertNotEqual(self.pixel(draw, cx - 3, 0), (0, 0, 0))
-                for radius in (-2 * marker, 0, 2 * marker):
-                    self.assertEqual(self.pixel(draw, cx + radius, cy), (0, 0, 0))
-                    self.assertEqual(self.pixel(draw, cx, cy + radius), (0, 0, 0))
-                self.assertNotEqual(self.pixel(draw, cx + 2 * marker + 1, cy), (0, 0, 0))
-                self.assertNotEqual(self.pixel(draw, cx, cy + 2 * marker + 1), (0, 0, 0))
+                # Inspect the entire square and its border: only the two
+                # diagonals are black, with equal horizontal/vertical reach.
+                for dy in range(-11, 12):
+                    for dx in range(-11, 12):
+                        black = self.pixel(draw, cx + dx, cy + dy) == (0, 0, 0)
+                        self.assertEqual(black, abs(dx) == abs(dy) and abs(dx) <= 10,
+                                         (width, dx, dy))
 
     def test_factories_do_not_share_dimensions(self):
         small = make_vga_test_bars(VGA_640_480)

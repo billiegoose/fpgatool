@@ -80,7 +80,8 @@ test_bars = make_vga_test_bars(spec)  # spec: VgaTimingSpec
 
 Call `test_bars(sig)` on the timing generator's output. The factory derives
 frame dimensions and constant bar thresholds from `spec`; every mode uses the
-same corner markers, edge ticks, and center cross. The seven bars differ in
+same corner markers, edge ticks, and center X spanning a square to reveal
+aspect-ratio distortion. The seven bars differ in
 width by at most one pixel, with blanking rendered black and sync passed through.
 
 ### 1920x1080 VGA test bars

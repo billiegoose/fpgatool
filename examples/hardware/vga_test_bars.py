@@ -12,7 +12,7 @@ def make_vga_test_bars(spec: VgaTimingSpec):
     Active frame dimensions become elaboration-time constants. Seven bars
     divide the width as evenly as possible. All modes use the same marker
     sizes: 5-pixel-thick, 30-pixel-long corners; 4-pixel-wide, 20-pixel-long
-    edge ticks; and a center cross with a 10-pixel radius. Blanking is black,
+    edge ticks; and a center X spanning a 21-by-21-pixel square. Blanking is black,
     and sync signals pass through unchanged.
     """
     FRAME_WIDTH = spec.frame_width
@@ -23,7 +23,7 @@ def make_vga_test_bars(spec: VgaTimingSpec):
 
     _CENTER_X = FRAME_WIDTH // 2
     _CENTER_Y = FRAME_HEIGHT // 2
-    _CROSS_RADIUS = 10
+    _X_RADIUS = 10
     _CORNER_LENGTH = 30
     _TICK_LENGTH = 20
     _CORNER_THICKNESS = 5
@@ -95,17 +95,18 @@ def make_vga_test_bars(spec: VgaTimingSpec):
                 & ((sig.pos.x < _TICK_LENGTH) | (sig.pos.x >= (FRAME_WIDTH - _TICK_LENGTH)))
             )
 
-            center_cross = (
-                (sig.pos.x == _CENTER_X)
-                & (sig.pos.y >= (_CENTER_Y - _CROSS_RADIUS))
-                & (sig.pos.y <= (_CENTER_Y + _CROSS_RADIUS))
-            ) | (
-                (sig.pos.y == _CENTER_Y)
-                & (sig.pos.x >= (_CENTER_X - _CROSS_RADIUS))
-                & (sig.pos.x <= (_CENTER_X + _CROSS_RADIUS))
+            # Equal pixel distances on both axes give 45-degree diagonals
+            # with square pixels. Sums avoid unsigned coordinate subtraction.
+            center_x = (
+                (sig.pos.x >= (_CENTER_X - _X_RADIUS))
+                & (sig.pos.x <= (_CENTER_X + _X_RADIUS))
+                & (
+                    ((sig.pos.x + _CENTER_Y) == (sig.pos.y + _CENTER_X))
+                    | ((sig.pos.x + sig.pos.y) == (_CENTER_X + _CENTER_Y))
+                )
             )
 
-            if corner | edge_tick | center_cross:
+            if corner | edge_tick | center_x:
                 r = 0
                 g = 0
                 b = 0
