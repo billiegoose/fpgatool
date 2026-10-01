@@ -69,7 +69,29 @@ as `build.log`, `load.log`, or `program.log` beside the design output. Pass
 
 ## Example structure
 
-Top-level `examples/*.py` files are complete board-facing designs: they own `@MAIN(100.0)` entry points and physical board interfaces. Reusable, board-agnostic hardware functions live under `examples/hardware/` and contain neither `@MAIN` declarations nor `board.*` imports. `examples/kitchen_sink_demo.py` demonstrates composition by combining the LED/seven-segment chaser, UART echo, VGA test bars, and mouse cursor blocks in one design.
+Top-level `examples/*.py` files are complete board-facing designs: they own `@MAIN` entry points and physical board interfaces. Reusable, board-agnostic hardware functions live under `examples/hardware/` and contain neither `@MAIN` declarations nor `board.*` imports. `examples/kitchen_sink_demo.py` demonstrates composition by combining the LED/seven-segment chaser, UART echo, VGA test bars, and mouse cursor blocks in one design.
+
+### 1920x1080 VGA test bars
+
+```sh
+./fpgatool.sh build examples/vga_1920_1080_test_bars.py
+```
+
+This Pypeline design runs at 148.5 MHz for 1920x1080 at 60 Hz (2200x1125 total
+pixels). `@MAIN(148.5)` declares a clock domain; it does not synthesize a clock
+from the board oscillator. The example imports `fpgatool_board.basys3.clock_148p5`
+to bind that domain to the physical 100 MHz clock on W5 using a synthesis-final
+board hook, just like the PS/2 and QSPI boundary adapters.
+
+The adapter uses two MMCMs with integer counters: 100 MHz × 27 / 4 / 5 = 135 MHz,
+then 135 MHz × 11 / 2 / 5 = 148.5 MHz. This keeps the pinned OpenXC7 backend on
+its tested integer-counter path; the VCOs run at 675 and 742.5 MHz. The second
+stage waits for the first to lock, and the pixel process stays disabled until
+the second stage's lock is synchronized. The hook supports one 148.5 MHz MAIN.
+The clock ratios follow the [7-series clocking guide](https://www.amd.com/content/dam/xilinx/support/documents/user_guides/ug472_7Series_Clocking.pdf).
+
+The resulting bitstream is `build/basys3/vga_1920_1080_test_bars/vga_1920_1080_test_bars.bit`.
+Building does not program the board; display operation needs a hardware check.
 
 ## Basys 3 peripheral coverage
 
@@ -78,7 +100,7 @@ examples can double as reference designs for individual board features.
 
 | Feature | Status / notes |
 | --- | --- |
-| 100 MHz oscillator | Supported; the current Basys 3 examples use the board clock directly. |
+| 100 MHz oscillator | Supported; most examples use it directly. The 1920x1080 VGA example derives a 148.5 MHz pixel clock using two MMCMs. |
 | 16 slide switches | Supported. |
 | 16 user LEDs | Supported. |
 | 5 pushbuttons | Supported. |
