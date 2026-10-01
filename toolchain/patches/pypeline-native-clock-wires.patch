@@ -1,0 +1,73 @@
+--- a/src/pypeline.py
++++ b/src/pypeline.py
+@@ -3939,6 +3939,28 @@
+     pass
+ 
+ 
++class _AsyncWireType(_WireType):
++    def __str__(self):
++        return f"AsyncWire[{self.inner_ctype}]"
++
++
++class _AsyncWireMeta(type):
++    def __getitem__(cls, inner_type):
++        return _AsyncWireType(inner_type)
++
++
++class AsyncWire(metaclass=_AsyncWireMeta):
++    """An explicit asynchronous global connection between clock domains.
++
++    Like Wire[T], but permits readers in a different MAIN clock domain.
++    This inserts no synchronization: the receiving hardware must provide
++    an appropriate synchronizer or CDC protocol. Use make_clock() on a
++    regular Wire[uint1_t] for clock nets themselves.
++    """
++
++    pass
++
++
+ # Input[T] / Output[T] — top-level module I/O port annotations
+ # ──────────────────────────────────────────────────────────────
+ 
+--- a/src/PY_TO_LOGIC.py
++++ b/src/PY_TO_LOGIC.py
+@@ -18,6 +18,7 @@
+     _RegType,
+     _FeedbackType,
+     _WireType,
++    _AsyncWireType,
+     _InputType,
+     _OutputType,
+     _ClockMarker,
+@@ -6708,6 +6709,8 @@
+         var_info.name = reg_name
+         var_info.type_name = _inner_ctype_to_str(ann_val.inner_ctype, parser_state)
+         parser_state.global_vars[reg_name] = var_info
++        if isinstance(ann_val, _AsyncWireType):
++            parser_state.async_wires.add(reg_name)
+         parser_state.pypeline_global_wire_names[reg_name] = (
+             f"{module_globals['__name__']}.{node.target.id}"
+         )
+--- a/src/OPEN_TOOLS.py
++++ b/src/OPEN_TOOLS.py
+@@ -639,8 +639,18 @@
+                 reported_net[key] = net
+ 
+         if len(self.path_reports) == 0:
+-            print("Bad synthesis log?:", syn_output)
+-            sys.exit(-1)
++            if "No Fmax available; no interior timing paths found in design." in syn_output:
++                # Some valid characterization wrappers (for example a clocking
++                # primitive such as an MMCM) have no register-to-register path.
++                # For PipelineC's combinational path-delay model that is a real
++                # measured zero-delay result, not a malformed timing report.
++                path_report = PathReport("")
++                path_report.path_group = "no_interior_timing_path"
++                path_report.path_delay_ns = 0.0
++                path_report.source_ns_per_clock = None
++                self.path_reports[path_report.path_group] = path_report
++            else:
++                raise Exception(f"Bad synthesis log?:\n{syn_output}")
+ 
+ 
+ class PathReport:

@@ -79,19 +79,46 @@ Top-level `examples/*.py` files are complete board-facing designs: they own `@MA
 
 This Pypeline design runs at 148.5 MHz for 1920x1080 at 60 Hz (2200x1125 total
 pixels). `@MAIN(148.5)` declares a clock domain; it does not synthesize a clock
-from the board oscillator. The example imports `fpgatool_board.basys3.clock_148p5`
-to bind that domain to the physical 100 MHz clock on W5 using a synthesis-final
-board hook, just like the PS/2 and QSPI boundary adapters.
+from the board oscillator. The example configures and calls its clock generator from
+a 100 MHz MAIN and wires its output using Pypeline's `make_clock()` declaration:
 
-The adapter uses two MMCMs with integer counters: 100 MHz × 27 / 4 / 5 = 135 MHz,
-then 135 MHz × 11 / 2 / 5 = 148.5 MHz. This keeps the pinned OpenXC7 backend on
-its tested integer-counter path; the VCOs run at 675 and 742.5 MHz. The second
-stage waits for the first to lock, and the pixel process stays disabled until
-the second stage's lock is synchronized. The hook supports one 148.5 MHz MAIN.
-The clock ratios follow the [7-series clocking guide](https://www.amd.com/content/dam/xilinx/support/documents/user_guides/ug472_7Series_Clocking.pdf).
+```python
+_pixel_clock_generator = make_mmcm_clock(100.0, MmcmStage(27, 4, 5), MmcmStage(11, 2, 5))
+pixel_clock: Wire[uint1_t] = make_clock(_pixel_clock_generator.output_mhz)
+pixel_locked: AsyncWire[uint1_t]
+
+@MAIN(100.0)
+def vga_pixel_clock():
+    signals = _pixel_clock_generator(0)
+    pixel_clock = signals.clock
+    pixel_locked = signals.locked
+```
+
+The pixel MAIN calls `synchronize_clock_lock(pixel_locked)` before advancing
+its timing counters. `AsyncWire` explicitly permits the asynchronous connection;
+the synchronizer provides asynchronous clear and a two-edge release in the pixel
+domain. `AsyncWire` itself inserts no synchronization.
+
+`examples/hardware/xilinx7_clock.py` provides the reusable `make_mmcm_clock()`
+factory and `MmcmStage` configuration. The example supplies the
+hardware-verified integer chain: 100 MHz × 27 / 4 / 5 = 135 MHz, then 135 MHz ×
+11 / 2 / 5 = 148.5 MHz. The VCOs run at 675 and 742.5 MHz, and the second MMCM
+waits for the first to lock. Configuration checks target Artix-7 -1 limits;
+fractional counters and analog clock/lock simulation are not provided. The
+input frequency supplied to the factory must match its calling MAIN's clock.
+The ratios follow the [7-series clocking guide](https://www.amd.com/content/dam/xilinx/support/documents/user_guides/ug472_7Series_Clocking.pdf).
+
+Vendor HDL is confined to ordinary `vhdl()` hardware functions. The design no
+longer rewrites generated VHDL or changes the compiler's pin-constraint setting.
+A small compiler compatibility patch exposes PipelineC's existing asynchronous
+wire support as `AsyncWire` and accepts clock primitives that have no interior
+timing paths. The build applies it to disposable module copies, leaving the
+pinned checkout unchanged. Existing nextpnr MMCM patches are unchanged.
 
 The resulting bitstream is `build/basys3/vga_1920_1080_test_bars/vga_1920_1080_test_bars.bit`.
-Building does not program the board; display operation needs a hardware check.
+Both the original final-hook implementation (saved in commit `d0739af`) and the
+native clock abstraction have been hardware-verified on Basys 3. Building does
+not program the board.
 
 ## Basys 3 peripheral coverage
 

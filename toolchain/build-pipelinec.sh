@@ -41,7 +41,18 @@ export FPGATOOL_FINAL_TOP_VHDL="$out_dir/pipelinec/top/top.vhd"
 
 # The source lives outside PipelineC, so make its reusable Pypeline library and
 # board modules importable without making host PYTHONPATH part of the contract.
-export PYTHONPATH="$pipelinec_dir/src:$pipelinec_dir/include/pypeline${PYTHONPATH:+:$PYTHONPATH}"
+compat_dir="$out_dir/pipelinec-compat"
+mkdir -p "$compat_dir/src"
+# pypeline_sim prepends its own directory to sys.path, so keep its unmodified
+# copy beside the patched modules as well.
+for module in pypeline.py PY_TO_LOGIC.py OPEN_TOOLS.py pypeline_sim.py; do
+  cp "$pipelinec_dir/src/$module" "$compat_dir/src/$module"
+done
+# Expose PipelineC's existing asynchronous-wire support to Pypeline and
+# accept clock primitives with no register-to-register characterization path.
+# Apply to disposable module copies; never modify the pinned checkout.
+patch --batch --forward -p1 -d "$compat_dir" < /workspace/toolchain/patches/pypeline-native-clock-wires.patch
+export PYTHONPATH="$compat_dir/src:$pipelinec_dir/src:$pipelinec_dir/include/pypeline${PYTHONPATH:+:$PYTHONPATH}"
 
 # PipelineC currently treats @final(syn) as one-shot even though a --comb
 # synthesis build rewrites the final top after its throughput sweep.  Board
