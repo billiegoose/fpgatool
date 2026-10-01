@@ -149,6 +149,12 @@ wire support as `AsyncWire` and accepts clock primitives that have no interior
 timing paths. The build applies it to disposable module copies, leaving the
 pinned checkout unchanged. Existing nextpnr MMCM patches are unchanged.
 
+The build also applies `pipelinec-timing-snapshot-memory.patch` to its disposable
+`AUTO_PIPELINE.py` copy. It makes Python deep copies use `TimingParams`' existing
+copy method, so timing snapshots retain independent pipeline choices while
+sharing the compiled logic graph. This avoids duplicating that large graph
+after a successful timing check, which can exhaust an 8 GiB build VM.
+
 The resulting bitstream is `build/basys3/vga_1920_1080_test_bars/vga_1920_1080_test_bars.bit`.
 Both the original final-hook implementation (saved in commit `d0739af`) and the
 native clock abstraction have been hardware-verified on Basys 3. Building does

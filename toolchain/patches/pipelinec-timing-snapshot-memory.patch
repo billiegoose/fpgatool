@@ -1,0 +1,16 @@
+--- a/src/AUTO_PIPELINE.py
++++ b/src/AUTO_PIPELINE.py
+@@ -127,6 +127,13 @@
+         self.hash_ext = None
+         # self.timing_report_stage_range = None
+ 
++    def __deepcopy__(self, memo):
++        # Sweep snapshots copy timing choices, not the elaborated logic graph.
++        # Use the same sharing semantics as the existing explicit copy API.
++        rv = self.DEEPCOPY()
++        memo[id(self)] = rv
++        return rv
++
+     def DEEPCOPY(self):
+         rv = copy.copy(self)
+         rv._slices = self._slices[:]  # COPY
