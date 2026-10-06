@@ -459,9 +459,13 @@ def cmd_sim(args: argparse.Namespace) -> None:
     if args.board != "basys3":
         raise FPGAToolError("VGA simulation currently supports the basys3 board")
     pipelinec = ensure_pipelinec()
+    if args.sim_backend == "hdl":
+        from simulation.compiled import simulate
+        simulate(args, source, pipelinec)
+        return
     compat = STATE_DIR / "sim-runtime"
     (compat / "src").mkdir(parents=True, exist_ok=True)
-    for name in ("pypeline.py", "PY_TO_LOGIC.py", "OPEN_TOOLS.py"):
+    for name in ("pypeline.py", "PY_TO_LOGIC.py", "OPEN_TOOLS.py", "pypeline_sim.py"):
         shutil.copy2(pipelinec / "src" / name, compat / "src" / name)
     run([require_tool("patch"), "--batch", "--forward", "-p1", "-d", str(compat),
          "-i", str(TOOLCHAIN_DIR / "patches" / "pypeline-native-clock-wires.patch")],
@@ -472,7 +476,7 @@ def cmd_sim(args: argparse.Namespace) -> None:
     cmd = [sys.executable, str(ROOT / "simulation" / "run.py"), str(source),
            "--pipelinec", str(pipelinec), "--compat", str(compat / "src"),
            "--out", str(build_dir(args.board, source) / "sim"),
-           "--frames", str(args.frames)]
+           "--frames", str(args.frames or 1)]
     if args.cycles:
         cmd += ["--cycles", str(args.cycles)]
     if args.vga_mode:
@@ -537,7 +541,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--offset", type=parse_offset, default=None, help="flash byte offset for program-data (default: board user-data start)")
     p.add_argument("--comb", action="store_true", help="disable PipelineC auto-pipelining and build the design as written")
     p.add_argument("-v", "--verbose", action="store_true", help="stream full toolchain output")
-    p.add_argument("--frames", type=positive_int, default=1, help="sim: complete VGA frames to capture (default: 1)")
+    p.add_argument("--frames", type=positive_int, default=None, help="sim: stop after N complete frames (default: continuous, or 1 with --no-open)")
+    p.add_argument("--sim-backend", choices=("hdl", "python"), default="hdl", help="sim: compiled hardware (default) or native Python debugging")
     p.add_argument("--cycles", type=positive_int, help="sim: maximum clock events before stopping")
     p.add_argument("--vga-mode", choices=("640x480", "800x600", "1280x720", "1920x1080"), help="sim: override automatically discovered VGA timing")
     p.add_argument("--no-open", action="store_true", help="sim: save frames and exit without opening the monitor")
@@ -581,4 +586,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Helpers share this orchestrator's configuration and exception type.
+    sys.modules["fpgatool"] = sys.modules[__name__]
     raise SystemExit(main())

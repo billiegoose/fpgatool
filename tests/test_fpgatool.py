@@ -138,6 +138,11 @@ class FPGAToolTests(unittest.TestCase):
         self.assertFalse(normal.comb)
         self.assertTrue(comb.comb)
 
+    def test_sim_defaults_to_continuous_compiled_backend(self):
+        args = fpgatool.parser().parse_args(['sim', 'examples/vga_test_bars.py'])
+        self.assertEqual(args.sim_backend, 'hdl')
+        self.assertIsNone(args.frames)
+
     def test_sim_cli_capture_options(self):
         args = fpgatool.parser().parse_args(['sim', 'examples/vga_test_bars.py',
             '--no-open', '--frames', '2', '--cycles', '1000', '--screenshot', 'bars.png'])

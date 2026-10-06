@@ -69,52 +69,71 @@ as `build.log`, `load.log`, or `program.log` beside the design output. Pass
 
 ## VGA simulation
 
-Open a virtual VGA monitor without an FPGA, Podman, or synthesis tools:
+Launch a live VGA monitor with no FPGA attached:
 
 ```sh
 ./fpgatool.sh sim examples/vga_test_bars.py
-./fpgatool.sh sim examples/vga_800_600_test_bars.py
-./fpgatool.sh sim examples/vga_1920_1080_test_bars.py
 ```
 
-`sim` runs the design in the pinned Pypeline Python runtime on the host and opens
-a local browser monitor. It samples the actual Basys 3 `VGA_R0..3`, `VGA_G0..3`,
-`VGA_B0..3`, `VGA_HS`, and `VGA_VS` output wires. Sync edges align the raster;
-the `make_vga_timing(spec)` call supplies resolution, porches, and pixel rate.
-RGB444 expands exactly to RGB888 (`channel * 17`), including black pixels.
-The receiver discards the initial partial frame and captures one complete frame
-by default. The monitor remains available until **Ctrl+C** stops its local server,
-with progress and partial image updates during capture. Native simulation is slower than real time: a
-640×480 capture can take several minutes; larger or more complex designs take
-longer. The first run fetches the pinned PipelineC checkout if needed. Python
-3.11 or newer, Git, and `patch` are sufficient host dependencies.
+The default backend generates the design's as-written VHDL, optimizes it with
+GHDL/Yosys, and runs the resulting hardware model with Verilator. The bundled
+MIT-licensed [vga-monitor-sim](https://github.com/DFiantWorks/vga-monitor-sim)
+receiver reconstructs images from the actual Basys 3 RGB and sync outputs and
+opens an ffplay window. Simulation continues until you close the window (or
+press **Q**, **Escape**, or **Ctrl+C**). The 640×480 test design runs at about
+5 frames per second on the development machine. This is simulated hardware
+speed, independent of the VGA timing's nominal refresh rate.
 
-Save screenshots for automated checks without opening a browser:
+The first launch compiles the model; unchanged designs reuse a cached binary.
+Changes to local Python sources, compiler patches, toolchain pins, monitor code,
+or host compiler versions invalidate the cache. Cached launches do not need
+Podman running. Compilation uses the existing pinned Podman/Nix environment;
+host dependencies are Python 3.11+, Git, Verilator, a C++ compiler, and Make.
+Live viewing also requires ffplay (included with FFmpeg). On macOS:
+
+```sh
+brew install verilator ffmpeg
+```
+
+Save screenshots without opening a window, or limit a live run:
 
 ```sh
 ./fpgatool.sh sim examples/vga_test_bars.py --no-open --screenshot build/bars.png
 ./fpgatool.sh sim examples/vga_test_bars.py --no-open --frames 2
+./fpgatool.sh sim examples/vga_test_bars.py --frames 60
 ```
 
-Captures live in `build/basys3/<design>/sim/`: `frame-0001.png`, subsequent
-numbered frames, `frame.png` (the latest complete frame), and `capture.json`
-(dimensions and clock counts). Each run replaces previous captures in that
-directory. `--frames N` selects the number of complete frames; `--cycles N`
-limits clock events and fails if the requested frames were not captured.
-Use `--vga-mode 640x480` (also `800x600`, `1280x720`, `1920x1080`) when a design
-does not use `make_vga_timing`, or has multiple timing factories.
+`--no-open` captures one frame by default. `--frames N` stops after N received
+frames; `--cycles N` limits input clock cycles and fails if the requested capture
+cannot finish. RGB444 expands to RGB888 (`channel * 17`). The latest frame and
+capture metadata are saved in `build/basys3/<design>/sim/frame.png` and
+`capture.json`; headless runs also save numbered frames. `--screenshot PATH`
+saves the last frame there when the run ends. Receiver and viewer diagnostics
+are in the same directory; compilation logs are in `.fpgatool/cache/hdl-sim/`.
+
+The compiled backend currently supports a single input clock and the upstream
+monitor's standard 640×480, 800×600, 1024×768, and 1280×960 timings. External
+inputs default to zero; Python simulation hooks do not execute in the compiled
+model. Designs using MMCM primitives, multiple clocks, or other VGA timings can
+use the native Python backend:
+
+```sh
+./fpgatool.sh sim examples/vga_800_600_test_bars.py --sim-backend python
+./fpgatool.sh sim examples/vga_1920_1080_test_bars.py --sim-backend python
+```
+
+The Python backend opens a browser monitor and captures one frame by default,
+then stays open until Ctrl+C. It can take several minutes for a 640×480 capture.
+It needs only Python, Git, and `patch`, and supports ideal MMCM clock/lock models
+and design simulation hooks. `--vga-mode` is available for this backend when
+timing cannot be discovered from `make_vga_timing`. Both paths follow explicit
+registers rather than synthesis-selected pipeline placement; neither models
+analog VGA or clock jitter.
 
 For Python image comparisons, `simulation.vga.VgaMonitor.sample(r, g, b, hs, vs)`
-accepts one sample per pixel clock and returns a `Frame` when a full raster is
-ready. `Frame.rgb` is an immutable, row-major RGB byte buffer; `Frame.pixel(x, y)`
-and `Frame.save(path)` provide pixel access and PNG export without dependencies.
-
-Simulation follows the design's explicit registers and configured `@MAIN` clock
-rates, including integer pixel-clock division. MMCM clock/lock models are ideal
-digital models. Inputs default to zero unless driven by a design's simulation
-hooks. This is functional simulation of the written Pypeline design; it does
-not simulate analog VGA, MMCM jitter, or synthesis-selected pipeline placement.
-Other raw `vhdl(...)` primitives need their own `@sim_model` implementations.
+accepts one sample per pixel clock and returns a complete `Frame`. `Frame.rgb`
+is a row-major RGB byte buffer; `Frame.pixel(x, y)` and `Frame.save(path)` provide
+pixel access and dependency-free PNG export.
 
 ## Example structure
 

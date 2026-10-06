@@ -162,7 +162,7 @@ def video():
             source.write_text(design)
             screen = Path(tmp) / 'screenshot.png'
             proc = subprocess.run([sys.executable, str(ROOT / 'fpgatool.py'), 'sim', str(source),
-                '--no-open', '--frames', '2', '--cycles', '2000', '--screenshot', str(screen)],
+                '--sim-backend', 'python', '--no-open', '--frames', '2', '--cycles', '2000', '--screenshot', str(screen)],
                 cwd=ROOT, text=True, capture_output=True, timeout=30)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             expected = bytes(c * 17 for y in range(3) for x in range(4) for c in rgb(x, y))
