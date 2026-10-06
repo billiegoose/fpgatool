@@ -20,7 +20,8 @@ clock = importlib.util.module_from_spec(SPEC)
 # Stub only the decorators/types; clock parameter validation runs unchanged.
 runtime = SimpleNamespace(
     NamedTuple=NamedTuple, hw_func=lambda fn: fn, struct=lambda cls: cls,
-    uint1_t=int, vhdl=lambda text: text,
+    uint1_t=int, Reg=list, vhdl=lambda text: text,
+    sim_model=lambda target: lambda fn: fn,
 )
 with mock.patch.dict(sys.modules, {"pypeline": runtime, SPEC.name: clock}):
     SPEC.loader.exec_module(clock)

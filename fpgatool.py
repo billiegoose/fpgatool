@@ -442,6 +442,48 @@ def cmd_run(args: argparse.Namespace) -> None:
     load_bitstream(args.board, bitstream)
 
 
+def positive_int(value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected a positive integer") from exc
+    if n <= 0:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return n
+
+
+def cmd_sim(args: argparse.Namespace) -> None:
+    source = normalize_source(args.source)
+    if source.suffix.lower() != ".py":
+        raise FPGAToolError("sim expects a Pypeline .py design")
+    if args.board != "basys3":
+        raise FPGAToolError("VGA simulation currently supports the basys3 board")
+    pipelinec = ensure_pipelinec()
+    compat = STATE_DIR / "sim-runtime"
+    (compat / "src").mkdir(parents=True, exist_ok=True)
+    for name in ("pypeline.py", "PY_TO_LOGIC.py", "OPEN_TOOLS.py"):
+        shutil.copy2(pipelinec / "src" / name, compat / "src" / name)
+    run([require_tool("patch"), "--batch", "--forward", "-p1", "-d", str(compat),
+         "-i", str(TOOLCHAIN_DIR / "patches" / "pypeline-native-clock-wires.patch")],
+        log_path=compat / "patch.log")
+    run([require_tool("patch"), "--batch", "--forward", "-p1", "-d", str(compat),
+         "-i", str(TOOLCHAIN_DIR / "patches" / "pypeline-sim-factory-annotations.patch")],
+        log_path=compat / "sim-patch.log")
+    cmd = [sys.executable, str(ROOT / "simulation" / "run.py"), str(source),
+           "--pipelinec", str(pipelinec), "--compat", str(compat / "src"),
+           "--out", str(build_dir(args.board, source) / "sim"),
+           "--frames", str(args.frames)]
+    if args.cycles:
+        cmd += ["--cycles", str(args.cycles)]
+    if args.vga_mode:
+        cmd += ["--vga-mode", args.vga_mode]
+    if args.no_open:
+        cmd.append("--no-open")
+    if args.screenshot:
+        cmd += ["--screenshot", str(Path(args.screenshot).expanduser().resolve())]
+    run(cmd)
+
+
 def status_line(label: str, ok: bool, detail: str) -> None:
     mark = "✓" if ok else "✗"
     print(f"{label:<14} {mark} {detail}")
@@ -487,14 +529,19 @@ def cmd_shell(args: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="fpgatool.sh",
-        description="Build FPGA designs, load them into volatile SRAM, or program persistent flash.",
+        description="Build or simulate FPGA designs, load volatile SRAM, or program persistent flash.",
     )
-    p.add_argument("command", nargs="?", choices=("build", "load", "run", "program", "program-data", "doctor", "shell"))
+    p.add_argument("command", nargs="?", choices=("build", "load", "run", "sim", "program", "program-data", "doctor", "shell"))
     p.add_argument("source", nargs="?", help="design source, .bit file, or binary data file depending on command")
     p.add_argument("--board", default=DEFAULT_BOARD, help=f"board profile (default: {DEFAULT_BOARD})")
     p.add_argument("--offset", type=parse_offset, default=None, help="flash byte offset for program-data (default: board user-data start)")
     p.add_argument("--comb", action="store_true", help="disable PipelineC auto-pipelining and build the design as written")
     p.add_argument("-v", "--verbose", action="store_true", help="stream full toolchain output")
+    p.add_argument("--frames", type=positive_int, default=1, help="sim: complete VGA frames to capture (default: 1)")
+    p.add_argument("--cycles", type=positive_int, help="sim: maximum clock events before stopping")
+    p.add_argument("--vga-mode", choices=("640x480", "800x600", "1280x720", "1920x1080"), help="sim: override automatically discovered VGA timing")
+    p.add_argument("--no-open", action="store_true", help="sim: save frames and exit without opening the monitor")
+    p.add_argument("--screenshot", help="sim: also save the last complete frame to this PNG path")
     return p
 
 
@@ -506,7 +553,7 @@ def main() -> int:
     if args.command is None:
         p.print_help()
         return 0
-    if args.command in {"build", "load", "run", "program", "program-data"} and args.source is None:
+    if args.command in {"build", "load", "run", "sim", "program", "program-data"} and args.source is None:
         if args.command in {"load", "program"}:
             p.error(f"{args.command} requires a .bit file, e.g. build/basys3/blink/blink.bit")
         if args.command == "program-data":
@@ -519,6 +566,7 @@ def main() -> int:
             "build": cmd_build,
             "load": cmd_load,
             "run": cmd_run,
+            "sim": cmd_sim,
             "program": cmd_program,
             "program-data": cmd_program_data,
             "doctor": cmd_doctor,
@@ -528,6 +576,8 @@ def main() -> int:
     except (FPGAToolError, subprocess.CalledProcessError) as exc:
         print(f"fpgatool: error: {exc}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":

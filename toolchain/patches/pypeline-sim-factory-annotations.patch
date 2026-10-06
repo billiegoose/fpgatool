@@ -1,0 +1,23 @@
+--- a/src/pypeline.py
++++ b/src/pypeline.py
+@@ -6753,6 +6753,20 @@
+     # Closure variables (e.g. h_uint, V_MAX) appear in Reg[T] annotations and body
+     # expressions but are not in fn.__globals__ — they live in fn.__closure__.
+     _eval_ns = dict(fn.__globals__)
++    # Python 3.14 no longer retains names used only by local annotations in
++    # co_freevars. Capture enclosing factory locals while decoration still
++    # has those frames alive; restrict this to lexical ancestors of fn.
++    _factory_frames = []
++    _frame = _sys._getframe(1)
++    while _frame is not None:
++        if (fn.__qualname__.startswith(_frame.f_code.co_qualname + ".<locals>.")
++                and _frame.f_code.co_filename == fn.__code__.co_filename):
++            _factory_frames.append(dict(_frame.f_locals))
++        _frame = _frame.f_back
++    for _locals in reversed(_factory_frames):
++        _eval_ns.update(_locals)
++    del _factory_frames, _frame
++
+     if fn.__code__.co_freevars and fn.__closure__:
+         for _cv, _cell in zip(fn.__code__.co_freevars, fn.__closure__):
+             try:

@@ -67,6 +67,55 @@ Normal builds keep the underlying Nix/PipelineC/programmer output quiet and save
 as `build.log`, `load.log`, or `program.log` beside the design output. Pass
 `--verbose` (or `-v`) to stream the full tool output directly to the terminal.
 
+## VGA simulation
+
+Open a virtual VGA monitor without an FPGA, Podman, or synthesis tools:
+
+```sh
+./fpgatool.sh sim examples/vga_test_bars.py
+./fpgatool.sh sim examples/vga_800_600_test_bars.py
+./fpgatool.sh sim examples/vga_1920_1080_test_bars.py
+```
+
+`sim` runs the design in the pinned Pypeline Python runtime on the host and opens
+a local browser monitor. It samples the actual Basys 3 `VGA_R0..3`, `VGA_G0..3`,
+`VGA_B0..3`, `VGA_HS`, and `VGA_VS` output wires. Sync edges align the raster;
+the `make_vga_timing(spec)` call supplies resolution, porches, and pixel rate.
+RGB444 expands exactly to RGB888 (`channel * 17`), including black pixels.
+The receiver discards the initial partial frame and captures one complete frame
+by default. The monitor remains available until **Ctrl+C** stops its local server,
+with progress and partial image updates during capture. Native simulation is slower than real time: a
+640×480 capture can take several minutes; larger or more complex designs take
+longer. The first run fetches the pinned PipelineC checkout if needed. Python
+3.11 or newer, Git, and `patch` are sufficient host dependencies.
+
+Save screenshots for automated checks without opening a browser:
+
+```sh
+./fpgatool.sh sim examples/vga_test_bars.py --no-open --screenshot build/bars.png
+./fpgatool.sh sim examples/vga_test_bars.py --no-open --frames 2
+```
+
+Captures live in `build/basys3/<design>/sim/`: `frame-0001.png`, subsequent
+numbered frames, `frame.png` (the latest complete frame), and `capture.json`
+(dimensions and clock counts). Each run replaces previous captures in that
+directory. `--frames N` selects the number of complete frames; `--cycles N`
+limits clock events and fails if the requested frames were not captured.
+Use `--vga-mode 640x480` (also `800x600`, `1280x720`, `1920x1080`) when a design
+does not use `make_vga_timing`, or has multiple timing factories.
+
+For Python image comparisons, `simulation.vga.VgaMonitor.sample(r, g, b, hs, vs)`
+accepts one sample per pixel clock and returns a `Frame` when a full raster is
+ready. `Frame.rgb` is an immutable, row-major RGB byte buffer; `Frame.pixel(x, y)`
+and `Frame.save(path)` provide pixel access and PNG export without dependencies.
+
+Simulation follows the design's explicit registers and configured `@MAIN` clock
+rates, including integer pixel-clock division. MMCM clock/lock models are ideal
+digital models. Inputs default to zero unless driven by a design's simulation
+hooks. This is functional simulation of the written Pypeline design; it does
+not simulate analog VGA, MMCM jitter, or synthesis-selected pipeline placement.
+Other raw `vhdl(...)` primitives need their own `@sim_model` implementations.
+
 ## Example structure
 
 Top-level `examples/*.py` files are complete board-facing designs: they own `@MAIN` entry points and physical board interfaces. Reusable, board-agnostic hardware functions live under `examples/hardware/` and contain neither `@MAIN` declarations nor `board.*` imports. `examples/kitchen_sink_demo.py` demonstrates composition by combining the LED/seven-segment chaser, UART echo, VGA test bars, and mouse cursor blocks in one design.

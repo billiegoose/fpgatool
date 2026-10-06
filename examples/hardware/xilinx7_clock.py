@@ -9,7 +9,7 @@ receiving domain before enabling stateful hardware. No generated-top edits.
 from dataclasses import dataclass
 import math
 
-from pypeline import NamedTuple, hw_func, struct, uint1_t, vhdl
+from pypeline import NamedTuple, Reg, hw_func, sim_model, struct, uint1_t, vhdl
 
 
 @struct
@@ -115,6 +115,13 @@ output_{i} : BUFG port map (I => raw{i}, O => c{i});
     def clock_generator(reset: uint1_t) -> clock_signals_t:
         vhdl(body)
 
+    @sim_model(clock_generator)
+    @hw_func
+    def clock_generator_sim(reset: uint1_t) -> clock_signals_t:
+        # Native simulation schedules MAIN clock edges by their MHz rates.
+        # This is an ideal clock/lock model; no analog acquisition or jitter.
+        return clock_signals_t(clock=1, locked=not reset)
+
     clock_generator.input_mhz = float(input_mhz)
     clock_generator.output_mhz = rate
     return clock_generator
@@ -140,3 +147,18 @@ begin
 end process;
 return_output(0) <= ready;
 """)
+
+
+@sim_model(synchronize_clock_lock)
+@hw_func
+def synchronize_clock_lock_sim(locked: uint1_t) -> uint1_t:
+    ready_meta: Reg[uint1_t] = 0
+    ready: Reg[uint1_t] = 0
+    if not locked:
+        ready_meta = 0
+        ready = 0
+        return 0
+    result = ready
+    ready = ready_meta
+    ready_meta = 1
+    return result
