@@ -136,6 +136,18 @@
             "${py.packaging}${pyPkgPath}"
           ];
         in {
+          simulation = pkgs.mkShell {
+            packages = [
+              pkgs.yosys pkgs.ghdl pkgs.yosys-ghdl pkgs.gcc pkgs.patch
+              (pkgs.python312.withPackages (p: [
+                p.pycparser p.pyyaml p.textx p.simplejson p.intervaltree p.distutils
+              ]))
+            ];
+            shellHook = ''
+              export PYPELINEC_YOSYS_GHDL_PLUGIN=${pkgs.yosys-ghdl}/share/yosys/plugins/ghdl.so
+              export FPGA_TOOL_PIPELINEC_PYTHON=python3
+            '';
+          };
           default = pkgs.mkShell {
             packages = [
               fasmLite
