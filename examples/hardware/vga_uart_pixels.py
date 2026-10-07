@@ -27,7 +27,7 @@ _edit = make_uart_text_writer(BYTE_CAPACITY)
 _bytes, _bytes_t = make_ram(uint8_t, BYTE_CAPACITY, ports=("w", "r"), read_latency=1)
 _rows = make_font_row_rom(ROW_BITMAPS)
 _meta, _meta_t = make_ram(uint9_t, 128, ports=("r",), read_latency=1, init=METADATA)
-_kern, _kern_t = make_ram(uint4_t, 16384, ports=("r",), read_latency=1, init=KERNING)
+_kern, _kern_t = make_ram(uint4_t, 16384, ports=("r", "r"), read_latency=1, init=KERNING)
 # Eight packed pixels per word; eight memory words plus the FWFT output word.
 # Including the consumer shift register, storage is at most 80 upcoming pixels.
 _pixels, _pixels_t = make_fifo(uint32_t, 8)
@@ -46,7 +46,7 @@ class glyph_row_t(NamedTuple):
     bits: uint21_t
     width: uint5_t
     backtrack: uint3_t
-    step: int7_t
+    origin: int13_t
     index: uint14_t
     after: uint14_t
     kind: uint2_t  # 0 glyph, 1 newline, 2 end of the snapshot.
@@ -80,7 +80,15 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     lookup_code: Reg[uint7_t] = 0
     previous_code: Reg[uint7_t] = 0
     previous_width: Reg[uint5_t] = 0
-    have_previous: Reg[uint1_t] = 0
+    previous_origin: Reg[int13_t] = MARGIN_X
+    older_code: Reg[uint7_t] = 0
+    older_width: Reg[uint5_t] = 0
+    older_origin: Reg[int13_t] = MARGIN_X
+    history_count: Reg[uint2_t] = 0
+    step_previous: Reg[int7_t] = 0
+    step_older: Reg[int7_t] = 0
+    candidate_previous: Reg[int13_t] = MARGIN_X
+    candidate_older: Reg[int13_t] = MARGIN_X
     load_state: Reg[uint3_t] = 0
     mail: Reg[glyph_row_t]
     mail_valid: Reg[uint1_t] = 0
@@ -92,12 +100,13 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     row = _rows(_rows.p0_in_t(addr=row_addr, valid=1))
     meta = _meta(_meta.p0_in_t(addr=lookup_code, valid=1))
     pair_addr: uint14_t = (uint14_t(previous_code) << 7) | uint14_t(lookup_code)
-    kern = _kern(_kern.p0_in_t(addr=pair_addr, valid=1))
+    older_pair_addr: uint14_t = (uint14_t(older_code) << 7) | uint14_t(lookup_code)
+    kern = _kern(_kern.p0_in_t(addr=pair_addr, valid=1),
+                 _kern.p1_in_t(addr=older_pair_addr, valid=1))
 
     state: Reg[uint3_t] = 7  # begin, take, offsets, shifts, emit, merge, unused, idle
     window: Reg[uint64_t] = 0
     frontier: Reg[uint11_t] = 0
-    previous_left: Reg[int13_t] = 0
     incoming_left: Reg[int13_t] = 0
     incoming_bits: Reg[uint21_t] = 0
     incoming_width: Reg[uint5_t] = 0
@@ -136,7 +145,6 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         window = 0
         frontier = 0
         goal = 0
-        previous_left = MARGIN_X
         ending = 0
         if row_blank | (glyph_y >= 32):
             ending = 1
@@ -156,7 +164,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
                 state = 4
                 stop_loader = 1
             else:
-                incoming_left = previous_left + int13_t(mail.step)
+                incoming_left = mail.origin
                 incoming_bits = mail.bits
                 incoming_width = mail.width
                 incoming_backtrack = mail.backtrack
@@ -187,7 +195,6 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         if shift_right:
             placed = uint64_t(incoming_bits) >> shift
         window = window | placed
-        previous_left = incoming_left
         state = 4
     elif state == 4:
         if offer:
@@ -227,7 +234,11 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     # and kerning lookup overlap the run generator's current-row work.
     if reset_request:
         read_index = restart_index
-        have_previous = 0
+        history_count = 0
+        previous_origin = MARGIN_X
+        older_origin = MARGIN_X
+        older_code = 0
+        older_width = 0
         previous_code = 0
         previous_width = 0
         mail_valid = 0
@@ -239,12 +250,12 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         load_state = 2
     elif load_state == 2:
         if read_index >= row_snapshot_end:
-            mail = glyph_row_t(bits=0, width=0, backtrack=0, step=0,
+            mail = glyph_row_t(bits=0, width=0, backtrack=0, origin=0,
                                index=read_index, after=row_snapshot_end, kind=2)
             mail_valid = 1
             load_state = 6
         elif chars.p1.rd_data == 10:
-            mail = glyph_row_t(bits=0, width=0, backtrack=0, step=0,
+            mail = glyph_row_t(bits=0, width=0, backtrack=0, origin=0,
                                index=read_index, after=read_index + 1, kind=1)
             mail_valid = 1
             load_state = 6
@@ -257,19 +268,34 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     elif load_state == 3:
         load_state = 4
     elif load_state == 4:
+        # Two read ports supply independent pair bounds from the same ROM.
+        step_previous = int7_t(previous_width) + 4 - int7_t(kern.p0.rd_data)
+        step_older = int7_t(older_width) + 4 - int7_t(kern.p1.rd_data)
         load_state = 5
     elif load_state == 5:
+        # Register the additions separately from the maximum and mailbox mux.
+        candidate_previous = previous_origin + int13_t(step_previous)
+        candidate_older = older_origin + int13_t(step_older)
+        load_state = 7
+    elif load_state == 7:
         if meta.p0.rd_data[8]:
-            step: int7_t = 0
-            if have_previous:
-                step = int7_t(previous_width) + 4 - int7_t(kern.p0.rd_data)
+            origin: int13_t = MARGIN_X
+            if history_count != 0:
+                origin = candidate_previous
+            if (history_count == 2) & (candidate_older > origin):
+                origin = candidate_older
             mail = glyph_row_t(bits=row.p0.rd_data, width=meta.p0.rd_data[4:0],
-                               backtrack=meta.p0.rd_data[7:5], step=step,
+                               backtrack=meta.p0.rd_data[7:5], origin=origin,
                                index=read_index, after=read_index + 1, kind=0)
             mail_valid = 1
+            older_code = previous_code
+            older_width = previous_width
+            older_origin = previous_origin
             previous_code = lookup_code
             previous_width = meta.p0.rd_data[4:0]
-            have_previous = 1
+            previous_origin = origin
+            if history_count < 2:
+                history_count = history_count + 1
             load_state = 6
         else:
             load_state = 1

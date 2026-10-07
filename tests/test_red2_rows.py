@@ -2,12 +2,29 @@
 import sys
 from pathlib import Path
 import unittest
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'examples'))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'examples'))
+sys.path.insert(0, str(ROOT / 'scripts'))
+from kerning_history import verify_two_glyph_history
 from hardware.red2_row_data import ROW_BITMAPS, METADATA, KERNING
 from hardware.red2_uart_data import COLUMNS, DESCRIPTORS, ADVANCES
 
 
 class Red2RowsTests(unittest.TestCase):
+    def test_two_glyph_history_dominates_all_older_constraints(self):
+        codes = [c for c in range(128) if METADATA[c] & 256]
+        self.assertEqual(verify_two_glyph_history(ADVANCES, codes), len(codes) ** 4)
+
+    def test_negative_advance_counterexample_is_rejected(self):
+        advances = [0] * 16384
+        a, b, c = map(ord, '#,4')
+        advances[(a << 7) | b] = 12
+        advances[(a << 7) | c] = 16
+        advances[(b << 7) | b] = 7
+        advances[(b << 7) | c] = -4
+        with self.assertRaisesRegex(ValueError, 'Two-glyph history is insufficient'):
+            verify_two_glyph_history(advances, [a, b, c])
+
     def test_each_row_matches_independent_column_data(self):
         for code, desc in enumerate(DESCRIPTORS):
             width, base = (desc >> 10) & 255, desc & 1023

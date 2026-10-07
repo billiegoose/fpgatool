@@ -4,6 +4,7 @@ import argparse
 import ast
 from pathlib import Path
 import sys
+from kerning_history import verify_two_glyph_history
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,6 +34,8 @@ def main():
             if not -64 <= advance < 64:
                 raise ValueError('Pair advance exceeds seven signed bits')
             advances[(left << 7) | right] = advance
+    checked = verify_two_glyph_history(advances, sorted(glyphs))
+    print(f'Two-glyph history verified across {checked:,} combinations at spacing 4')
     lines = ['"""Generated from raw RED2 Aseprite slices; no R2BF dependency.',
              'Descriptor: valid bit 18, width bits 17:10, base column bits 9:0.',
              'Advance index: (previous ASCII << 7) | current ASCII.',
@@ -47,7 +50,7 @@ def main():
     output.write_text('\n'.join(lines))
     # Row-major scanout data: one horizontal glyph row per ROM word.
     # Compute how far any future glyph can reach back from this glyph's origin.
-    # This permits streaming even for negative pair advances such as comma->4.
+    # Retain explicit guards even though this font now has nonnegative advances.
     future = {code: 0 for code in glyphs}
     for iteration in range(len(glyphs)):
         bounds = {left: min(0, min(advances[(left << 7) | right] + future[right]

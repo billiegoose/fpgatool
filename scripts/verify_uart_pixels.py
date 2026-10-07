@@ -21,20 +21,22 @@ def expected_pixels(text, width=1920, height=1080, margin_x=5, margin_y=2):
     text = buffered
     pixels = bytearray(width * height)
     right, bottom = width - margin_x, height - margin_y
-    y, previous, previous_x = margin_y, None, margin_x
+    y, history = margin_y, []
     for code in text:
         if code == 10:
             y += 36
-            previous = None
+            history = []
             continue
         if code >= 128 or not DESCRIPTORS[code] & (1 << 18):
             continue
         descriptor = DESCRIPTORS[code]
         base, glyph_width = descriptor & 1023, (descriptor >> 10) & 255
-        x = margin_x if previous is None else previous_x + ADVANCES[(previous << 7) | code]
+        x = max((left_x + ADVANCES[(left << 7) | code]
+                 for left, left_x in history), default=margin_x)
         if x + glyph_width > right:
             y += 36
             x = margin_x
+            history = []
         if y >= bottom:
             break
         for dx in range(glyph_width):
@@ -43,7 +45,7 @@ def expected_pixels(text, width=1920, height=1080, margin_x=5, margin_y=2):
                 for dy in range(min(32, bottom - y)):
                     if column & (1 << dy):
                         pixels[(y + dy) * width + x + dx] = 255
-        previous, previous_x = code, x
+        history.append((code, x))
     return bytes(pixels)
 
 
