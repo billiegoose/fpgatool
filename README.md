@@ -167,28 +167,35 @@ Font storage is row-major and dictionary-compressed. The current font has 253
 unique 21-bit row patterns, including dictionary entry 0 for blank. Each glyph
 stores only the rows between its first and last inked scanlines: 1,253 cropped
 rows occupy a 2048×8-bit index ROM, feeding a 256×21-bit dictionary ROM. The
-128×31-bit glyph metadata stores width, top_y, cropped height, base row address,
-validity, and the backtracking guard. A scanline outside the cropped height
-supplies blank ink without changing glyph width or placement; spaces have zero
-stored rows. Kerning remains a separate 16384×4-bit table. A 64-bit compositor
-ORs each incoming row into unfinished ink and emits only pixels that no future
-glyph can affect. The generated metadata retains a backtracking guard; all
-guards are zero with the current nonnegative pair advances.
+128×43-bit glyph metadata stores width, top_y, cropped height, base row address,
+validity, the backtracking guard, and separate six-bit left/right kerning class
+IDs. A scanline outside the cropped height supplies blank ink without changing
+glyph width or placement; spaces have zero stored rows. Kerning uses 55 left
+classes (identical adjustment rows) and 51 right classes (identical adjustment
+columns). The generated table has 55×51 four-bit entries; the hardware pads to a
+64-column stride in a 4096×4-bit dual-port ROM, allowing addressing as
+`(left_class << 6) | right_class`. Class mappings share the metadata read, so
+they require no separate block RAM. Font generation verifies every supported
+ASCII pair retains exactly the original adjustment. A 64-bit compositor ORs each
+incoming row into unfinished ink and emits only pixels that no future glyph can
+affect. The generated metadata retains a backtracking guard; all guards are zero
+with the current nonnegative pair advances.
 
-The loader remembers the two previous supported glyphs, their widths, and
-absolute origins. It places each new glyph at the maximum origin required by
+The loader remembers the two previous supported glyphs' left classes, widths,
+and absolute origins. It places each new glyph at the maximum origin required by
 both pair advances, preserving earlier spacing through tucked punctuation such
 as `P.O.` and `F.T`. Two read ports use the same kerning ROM. The loader
 registers `base + glyph_y - top_y`, reads its dictionary index, then reads the
 21-bit pattern. These add two stages to the original loader; kerning runs in
-parallel. Prefetching the next UART byte during lookup and decoding it when the
-mailbox is consumed keeps the steady-state interval at six clocks per glyph,
-preserving the original loader throughput. History starts empty for each
-scanline replay at the current text line's first byte, so LF, wrapping, and
-backspace retain their existing behavior. There is no placement cache. Font
-generation exhaustively checks every four-glyph combination to prove that two-
-glyph history is sufficient at spacing 4; an incompatible font is rejected
-before updating the ROM constants.
+parallel. The class-dependent kerning read follows metadata by one clock; its
+arithmetic uses the existing pipeline stages. Prefetching the next UART byte
+during lookup and decoding it when the mailbox is consumed keeps the
+steady-state interval at six clocks per glyph, preserving the original loader
+throughput. History starts empty for each scanline replay at the current text
+line's first byte, so LF, wrapping, and backspace retain their existing
+behavior. There is no placement cache. Font generation exhaustively checks every
+four-glyph combination to prove that two-glyph history is sufficient at spacing
+4; an incompatible font is rejected before updating the ROM constants.
 
 Eight settled pixels are mapped to four-bit palette indices and packed into
 one 32-bit FIFO word. The circular FIFO has eight memory words; including its
@@ -225,14 +232,15 @@ font data, rather than the streaming compositor:
   build/vga_uart_readme_1080.png assets/red2-readme-example.txt
 ```
 
-The final Basys 3 route meets 148.5 MHz at 166.33 MHz. It uses four RAMB36 and
-two RAMB18 blocks (22.5 KiB, 10% of the board's block RAM), down from 29.25 KiB
-before font compression. Font row storage falls from five RAMB18 blocks to two.
-Compiled HDL captures match the 335-byte README sample, a 609-byte
-punctuation/wrapping/backspace stress input, and a 1,579-byte all-glyph/cropped-
-row/dense-kerning input exactly. The build command also checks the final pin-
-constrained timing report before publishing its bitstream; a failing final route
-is rejected even when nextpnr exits successfully.
+The final Basys 3 route meets 148.5 MHz at 169.09 MHz. It uses two RAMB36 and
+three RAMB18 blocks (15.75 KiB, 7% of the board's block RAM), down from 22.5 KiB
+with row compression alone and 29.25 KiB before both optimizations. Font row
+storage falls from five RAMB18 blocks to two; kerning falls from two RAMB36
+blocks to one RAMB18. Compiled HDL captures match the 335-byte README sample, a
+609-byte punctuation/wrapping/backspace stress input, and a 1,579-byte
+all-glyph/cropped-row/dense-kerning input exactly. The build command also
+checks the final pin-constrained timing report before publishing its bitstream;
+a failing final route is rejected even when nextpnr exits successfully.
 
 The board demo also exposes UART diagnostics from the same receiver used by
 the renderer. The seven-segment display reads `CCBB`: received-byte count modulo

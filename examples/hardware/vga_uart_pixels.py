@@ -10,7 +10,8 @@ from fifo import make_fifo
 from vga.timing import VGA_1920_1080, make_vga_timing
 from vga.types import vga_12bpp_t
 from hardware.font_row_rom import make_font_row_rom
-from hardware.red2_row_data import ROW_DICTIONARY, ROW_INDICES, METADATA, KERNING
+from hardware.red2_row_data import (ROW_DICTIONARY, ROW_INDICES, METADATA, KERNING,
+                                    KERNING_LEFT_COUNT, KERNING_RIGHT_COUNT)
 from hardware.uart_rx import make_uart_rx, uart_rx_t
 from hardware.uart_text_buffer import make_uart_text_writer
 
@@ -28,8 +29,13 @@ _bytes, _bytes_t = make_ram(uint8_t, BYTE_CAPACITY, ports=("w", "r"), read_laten
 _rows = make_font_row_rom(ROW_DICTIONARY)
 _row_indices, _row_indices_t = make_ram(uint8_t, len(ROW_INDICES), ports=("r",),
                                       read_latency=1, init=ROW_INDICES)
-_meta, _meta_t = make_ram(uint31_t, 128, ports=("r",), read_latency=1, init=METADATA)
-_kern, _kern_t = make_ram(uint4_t, 16384, ports=("r", "r"), read_latency=1, init=KERNING)
+_meta, _meta_t = make_ram(uint43_t, 128, ports=("r",), read_latency=1, init=METADATA)
+# Pad the compact class table to a 64-column stride: two six-bit IDs are the
+# address. Both histories read the same 4096 x 4-bit dual-port block ROM.
+_kerning_init = [KERNING[left * KERNING_RIGHT_COUNT + right]
+                 if left < KERNING_LEFT_COUNT and right < KERNING_RIGHT_COUNT else 0
+                 for left in range(64) for right in range(64)]
+_kern, _kern_t = make_ram(uint4_t, 4096, ports=("r", "r"), read_latency=1, init=_kerning_init)
 # Eight packed pixels per word; eight memory words plus the FWFT output word.
 # Including the consumer shift register, storage is at most 80 upcoming pixels.
 _pixels, _pixels_t = make_fifo(uint32_t, 8)
@@ -85,10 +91,10 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     at_end: Reg[uint1_t] = 1
     next_at_end: Reg[uint1_t] = 1
     lookup_code: Reg[uint7_t] = 0
-    previous_code: Reg[uint7_t] = 0
+    previous_class: Reg[uint6_t] = 0
     previous_width: Reg[uint5_t] = 0
     previous_origin: Reg[int13_t] = MARGIN_X
-    older_code: Reg[uint7_t] = 0
+    older_class: Reg[uint6_t] = 0
     older_width: Reg[uint5_t] = 0
     older_origin: Reg[int13_t] = MARGIN_X
     history_count: Reg[uint2_t] = 0
@@ -108,8 +114,8 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     row_index = _row_indices(_row_indices.p0_in_t(addr=row_addr, valid=1))
     row = _rows(_rows.p0_in_t(addr=row_index.p0.rd_data, valid=1))
     meta = _meta(_meta.p0_in_t(addr=lookup_code, valid=1))
-    pair_addr: uint14_t = (uint14_t(previous_code) << 7) | uint14_t(lookup_code)
-    older_pair_addr: uint14_t = (uint14_t(older_code) << 7) | uint14_t(lookup_code)
+    pair_addr: uint12_t = (uint12_t(previous_class) << 6) | uint12_t(meta.p0.rd_data[42:37])
+    older_pair_addr: uint12_t = (uint12_t(older_class) << 6) | uint12_t(meta.p0.rd_data[42:37])
     kern = _kern(_kern.p0_in_t(addr=pair_addr, valid=1),
                  _kern.p1_in_t(addr=older_pair_addr, valid=1))
 
@@ -247,9 +253,9 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         history_count = 0
         previous_origin = MARGIN_X
         older_origin = MARGIN_X
-        older_code = 0
+        older_class = 0
         older_width = 0
-        previous_code = 0
+        previous_class = 0
         previous_width = 0
         mail_valid = 0
         load_state = 1
@@ -293,16 +299,17 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         # Out-of-crop reads may wrap within the index ROM; their ink is masked
         # at the mailbox. Keep the crop comparison off the address path.
         row_addr = meta.p0.rd_data[30:20] + uint11_t(row_glyph_y - top_y)
-        # Two read ports supply independent pair bounds from the same ROM.
-        step_previous = int7_t(previous_width) + 4 - int7_t(kern.p0.rd_data)
-        step_older = int7_t(older_width) + 4 - int7_t(kern.p1.rd_data)
         load_state = 5
     elif load_state == 5:
+        # Class mappings arrive with metadata; the dependent kerning read
+        # settles one clock later. Both histories share the same class ROM.
+        step_previous = int7_t(previous_width) + 4 - int7_t(kern.p0.rd_data)
+        step_older = int7_t(older_width) + 4 - int7_t(kern.p1.rd_data)
+        load_state = 7
+    elif load_state == 7:
         # Register the additions separately from the maximum and mailbox mux.
         candidate_previous = previous_origin + int13_t(step_previous)
         candidate_older = older_origin + int13_t(step_older)
-        load_state = 7
-    elif load_state == 7:
         # Index ROM -> dictionary ROM. Its registered read settles before
         # the following mailbox stage. Kerning runs in parallel.
         next_at_end = following_index >= row_snapshot_end
@@ -321,10 +328,10 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
                                backtrack=meta.p0.rd_data[7:5], origin=origin,
                                index=read_index, after=following_index, kind=0)
             mail_valid = 1
-            older_code = previous_code
+            older_class = previous_class
             older_width = previous_width
             older_origin = previous_origin
-            previous_code = lookup_code
+            previous_class = meta.p0.rd_data[36:31]
             previous_width = meta.p0.rd_data[4:0]
             previous_origin = origin
             if history_count < 2:

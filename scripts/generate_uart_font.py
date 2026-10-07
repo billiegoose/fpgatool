@@ -85,6 +85,31 @@ def main():
             if not 0 <= kern <= 15:
                 raise ValueError('Kerning adjustment must fit four unsigned bits')
             kerns[(code << 7) | right] = kern
+    # Group full kerning rows and columns independently, over supported glyphs.
+    codes = sorted(glyphs)
+    left_groups, right_groups = {}, {}
+    left_ids, right_ids = {}, {}
+    for code in codes:
+        row_key = tuple(kerns[(code << 7) | right] for right in codes)
+        col_key = tuple(kerns[(left << 7) | code] for left in codes)
+        left_ids[code] = left_groups.setdefault(row_key, len(left_groups))
+        right_ids[code] = right_groups.setdefault(col_key, len(right_groups))
+    left_count, right_count = len(left_groups), len(right_groups)
+    if left_count > 64 or right_count > 64:
+        raise ValueError('Kerning classes exceed six-bit IDs')
+    class_kerns = [None] * (left_count * right_count)
+    for left in codes:
+        for right in codes:
+            address = left_ids[left] * right_count + right_ids[right]
+            value = kerns[(left << 7) | right]
+            if class_kerns[address] is not None and class_kerns[address] != value:
+                raise ValueError('Kerning classes do not preserve pair adjustments')
+            class_kerns[address] = value
+        metadata[left] |= (left_ids[left] << 31) | (right_ids[left] << 37)
+    if any(value is None for value in class_kerns):
+        raise ValueError('Kerning class table contains an unmapped pair')
+    print(f'Kerning classes: {left_count} left x {right_count} right, '
+          f'{len(class_kerns)} four-bit entries')
     if len(dictionary) > 256:
         raise ValueError('Row dictionary exceeds eight-bit indices')
     if len(row_indices) > 2048:
@@ -98,12 +123,15 @@ def main():
     row_lines = ['"""Raw RED2 row-major font ROMs for the streaming pixel engine.',
                  'Row address = base + glyph_y - top_y, only within cropped height.',
                  'ROW_DICTIONARY[ROW_INDICES[address]]; bit 0 is the left pixel.',
-                 'Metadata: base[30:20], top_y[19:15], height[14:9],',
+                 'Metadata: right class[42:37], left class[36:31], base[30:20],',
+                 'top_y[19:15], height[14:9],',
                  'valid[8], future backtrack[7:5], width[4:0].',
-                 'Pair step = current width + 4 - KERNING[(current << 7) | next].',
-                 'Regenerate with scripts/generate_uart_font.py.', '"""', '']
+                 'KERNING[left_class * KERNING_RIGHT_COUNT + right_class] is a four-bit adjustment.',
+                 'Pair step = previous width + 4 - adjustment.',
+                 'Regenerate with scripts/generate_uart_font.py.', '"""', '',
+                 f'KERNING_LEFT_COUNT = {left_count}', f'KERNING_RIGHT_COUNT = {right_count}', '']
     for name, values in [('ROW_DICTIONARY', dictionary), ('ROW_INDICES', row_indices),
-                         ('METADATA', metadata), ('KERNING', kerns)]:
+                         ('METADATA', metadata), ('KERNING', class_kerns)]:
         row_lines.append(name + ' = (')
         for start in range(0, len(values), 16):
             row_lines.append('    ' + ', '.join(map(str, values[start:start+16])) + ',')
