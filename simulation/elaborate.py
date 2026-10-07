@@ -24,7 +24,8 @@ if any(any(c.isspace() for c in f) for f in files):
     raise ValueError('GHDL import requires source paths without whitespace')
 script = 'ghdl --std=08 -frelaxed ' + ' '.join(files) + ' -e top\n'
 script += 'setattr -unset keep\nsetattr -unset syn_keep\nsetattr -unset dont_touch\n'
-script += 'synth -top top -flatten\ncheck -assert\nrename -hide\n'
+# Preserve BRAM as behavioral memories rather than expanding every bit into gates.
+script += 'hierarchy -check -top top\nproc\nflatten\nopt\nmemory -nomap\nopt\ntechmap\nopt\ncheck -assert\nrename -hide\n'
 script += f'write_verilog -noattr "{out / "top.v"}"\n'
 (out / 'translate.ys').write_text(script)
 subprocess.run(['yosys', '-m', os.environ['PYPELINEC_YOSYS_GHDL_PLUGIN'],

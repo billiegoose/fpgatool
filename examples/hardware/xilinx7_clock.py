@@ -154,11 +154,12 @@ return_output(0) <= ready;
 def synchronize_clock_lock_sim(locked: uint1_t) -> uint1_t:
     ready_meta: Reg[uint1_t] = 0
     ready: Reg[uint1_t] = 0
+    result: uint1_t = 0
     if not locked:
         ready_meta = 0
         ready = 0
-        return 0
-    result = ready
-    ready = ready_meta
-    ready_meta = 1
+    else:
+        result = ready
+        ready = ready_meta
+        ready_meta = 1
     return result

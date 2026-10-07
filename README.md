@@ -112,7 +112,7 @@ saves the last frame there when the run ends. Receiver and viewer diagnostics
 are in the same directory; compilation logs are in `.fpgatool/cache/hdl-sim/`.
 
 The compiled backend currently supports a single input clock and the upstream
-monitor's standard 640×480, 800×600, 1024×768, and 1280×960 timings. External
+monitor's standard 640×480, 800×600, 1024×768, 1280×960, and 1920×1080 timings. External
 inputs default to zero; Python simulation hooks do not execute in the compiled
 model. Designs using MMCM primitives, multiple clocks, or other VGA timings can
 use the native Python backend:
@@ -134,6 +134,126 @@ For Python image comparisons, `simulation.vga.VgaMonitor.sample(r, g, b, hs, vs)
 accepts one sample per pixel clock and returns a complete `Frame`. `Frame.rgb`
 is a row-major RGB byte buffer; `Frame.pixel(x, y)` and `Frame.save(path)` provide
 pixel access and dependency-free PNG export.
+
+### 1920×1080 UART text demo
+
+`examples/vga_uart_1920_1080_demo.py` receives 115200-baud 8-N-1 serial
+input on the Basys 3 USB-UART bridge and renders RED2 text at 1920×1080,
+60 Hz. It uses the hardware-verified 100 → 135 → 148.5 MHz MMCM chain:
+
+```sh
+./fpgatool.sh build examples/vga_uart_1920_1080_demo.py
+./fpgatool.sh sim examples/vga_uart_1920_1080_capture.py --no-open \
+  --uart-file assets/red2-readme-example.txt --frames 3 \
+  --screenshot build/vga_uart_readme_1080.png
+```
+
+The renderer stores incoming UART bytes in an append-only 8 KiB buffer,
+including LF. It snapshots the committed byte count once per frame and replays
+the same byte span for every glyph scanline. LF advances to the next text line;
+CR and unsupported bytes are skipped. Text starts at (5, 2), with a 5-pixel
+left/right and 2-pixel top/bottom margin around the entire screen. It uses
+native font pixels and pair kerning, and wraps before the right margin. UART
+TX stays idle. The demo does not scroll or edit text.
+
+Font storage is row-major: a 4096×21-bit ROM holds one complete horizontal
+glyph row per address `(ASCII << 5) | glyph_y`. Separate 128×9-bit metadata and
+16384×4-bit kerning tables provide widths and placement. A 64-bit compositor
+ORs each incoming row into unfinished ink and emits only pixels that no future
+glyph can affect. The generated metadata includes a backtracking guard for
+negative pair advances.
+
+Eight settled pixels are mapped to four-bit palette indices and packed into
+one 32-bit FIFO word. The circular FIFO has eight memory words; including its
+FWFT output word and consumer shift register, it stores at most 80 upcoming
+pixels. VGA consumes one index per active clock. There is no framebuffer or
+full-scanline pixel buffer. The current palette maps 0 to black and 1 to white.
+
+VGA timing requests the next row during horizontal blanking. Blanking first
+drains any stale FIFO words, then starts the next row and prefills the FIFO.
+If a row underflows, remaining pixels are background and the next row starts
+fresh; timing never stalls. A sticky underflow fault lights the seven-segment
+decimal point.
+
+`examples/vga_uart_1920_1080_capture.py` supplies an ideal 148.5 MHz clock to
+the same UART/video core used by the board demo, since the compiled backend
+does not simulate MMCMs. `--uart-file` drives actual 8-N-1 serial bits into
+`RsRx`; `--uart-baud` defaults to 115200. Three frames allow the complete
+README sample to arrive and a stable frame to be captured.
+
+The checked-in font data comes directly from raw Aseprite slices, independent
+of R2BF. Regenerate the row ROMs, column data for verification, and README
+sample from the adjacent `red2-font` checkout (requires Aseprite and its Pillow
+environment):
+
+```sh
+../red2-font/.venv/bin/python scripts/generate_uart_font.py
+```
+
+Capture verification uses an independent renderer based on the column-major
+font data, rather than the streaming compositor:
+
+```sh
+../red2-font/.venv/bin/python scripts/verify_uart_pixels.py \
+  build/vga_uart_readme_1080.png assets/red2-readme-example.txt
+```
+
+The final Basys 3 route meets 148.5 MHz at 179.86 MHz. It uses four RAMB36
+and five RAMB18 blocks (29.25 KiB, 13% of the board's block RAM). Compiled HDL
+captures match the 335-byte README sample and a 307-byte border/wrapping stress
+input exactly. The build command also checks the final pin-constrained timing
+report before publishing its bitstream; a failing final route is rejected even
+when nextpnr exits successfully.
+
+The board demo also exposes UART diagnostics from the same receiver used by
+the renderer. The seven-segment display reads `CCBB`: received-byte count modulo
+256 followed by the last received byte, both hexadecimal. Sending `A` after
+configuration should show `0141`; LF is `0A`, CR is `0D`. Every valid UART byte
+counts, including bytes ignored by the text layout. Indicators reset on FPGA
+configuration; activity and write indicators stay lit until then.
+
+| LEDs | Meaning |
+| --- | --- |
+| LD0–LD7 | Last received byte, bit 0 through bit 7 |
+| LD8 | Pixel clock locked |
+| LD9 | Pixel-domain heartbeat |
+| LD10 | Synchronized RX level (normally lit while idle) |
+| LD11 | RX has gone low at least once |
+| LD12 | At least one valid UART byte received |
+| LD13 | Toggles on every valid byte |
+| LD14 | At least one byte committed to the text buffer |
+| LD15 | Text buffer full (8,192 bytes) |
+
+With LD11 off, check the host port and serial connection. LD11 on with LD12 off
+means activity reached RX but no valid byte was decoded; check 115200 baud,
+8-N-1, and disabled flow control. LD12 on with LD14 off means bytes arrived but
+have not been committed to the text buffer. LD15 means configuration must be
+reloaded to start a fresh screen; the demo does not scroll or clear.
+
+To type into the 1080p UART demo (`examples/vga_uart_1920_1080_demo.py`), connect
+with `tio`:
+
+```sh
+tio --map OCRNL,OLTU /dev/cu.usbserial-2101837357871
+```
+
+`OCRNL` sends Enter as a newline, and `OLTU` converts lowercase input to
+uppercase. Exit with Ctrl-T followed by Q. Replace the port with the board's
+current UART device if needed.
+
+Send hardware test input with a single connection that configures 115200 baud,
+8-N-1 and no flow control before writing. This avoids relying on serial settings
+surviving a port close/reopen. The sender uses Python's standard library:
+
+```sh
+python3 scripts/send_uart.py --port /dev/cu.usbserial-2101837357871 --text ABC --newline
+python3 scripts/send_uart.py --port /dev/cu.usbserial-2101837357871 --file assets/red2-readme-example.txt
+```
+
+After a fresh configuration, the first command should display `040A` on the
+seven-segment display and `ABC` on VGA. Replace the port with the board's current
+UART device. Add `--delay-ms 10` to compare paced bytes against the default
+continuous stream while diagnosing reception.
 
 ## Example structure
 

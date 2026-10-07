@@ -47,22 +47,58 @@ def driver_source(verilog):
     for pin in pins:
         if not re.search(r'\boutput ' + pin + r'\s*;', verilog):
             raise ValueError(f'design must expose the Basys 3 {pin} output')
+    has_uart = bool(re.search(r'\binput RsRx\s*;', verilog))
+    uart_setup = r'''const char* uart_path = std::getenv("FPGATOOL_SIM_UART_FILE");
+ std::vector<unsigned char> uart_bytes;
+ if(uart_path) {
+  std::ifstream input(uart_path, std::ios::binary);
+  if(!input) { std::fprintf(stderr,"Cannot open UART input file\n"); return 1; }
+  uart_bytes.assign(std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>());
+ }
+ const char* baud_env = std::getenv("FPGATOOL_SIM_UART_BAUD");
+ double baud = baud_env ? std::strtod(baud_env,nullptr) : 115200;
+ if(!(baud > 0)) { std::fprintf(stderr,"Invalid UART baud\n"); return 1; }
+''' if has_uart else r'''if(std::getenv("FPGATOOL_SIM_UART_FILE")) {
+  std::fprintf(stderr,"UART stimulus requires a top-level RsRx input\n"); return 1;
+ }
+'''
+    if has_uart:
+        uart_setup += f' const uint64_t uart_div = std::llround({mhz * 1_000_000:.17g}/baud);\n'
+        uart_setup += ' if(uart_div < 4) { std::fprintf(stderr,"UART bit period is too short\\n"); return 1; }\n'
+    uart_tick = r'''dut.RsRx=1;
+  if(cycle >= 16*uart_div) {
+   uint64_t symbol=(cycle-16*uart_div)/uart_div;
+   uint64_t index=symbol/11;
+   unsigned bit=symbol%11;
+   if(index<uart_bytes.size()) {
+    if(bit==0) dut.RsRx=0;
+    else if(bit<=8) dut.RsRx=(uart_bytes[index]>>(bit-1))&1;
+   }
+  }
+''' if has_uart else ''
     packed = ' | '.join(f'(unsigned(dut.{pin}) << {bit})' for bit, pin in enumerate(pins))
     return f'''#include "Vtop.h"
 #include "verilated.h"
 #include <cstdint>
 #include <cstdlib>
+#include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <iterator>
+#include <vector>
 extern "C" void* vga_monitor_open(const char*);
 extern "C" void vga_monitor_event(void*,double,uint8_t,uint8_t,uint8_t,int,int);
 extern "C" void vga_monitor_close(void*);
 int main(int argc,char** argv) {{
  Verilated::commandArgs(argc,argv);
  Vtop dut;
+ {uart_setup}
  void* monitor=vga_monitor_open("fpgatool VGA");
  const char* cap=std::getenv("FPGATOOL_SIM_CYCLES");
  uint64_t limit=cap ? std::strtoull(cap,nullptr,10) : UINT64_MAX;
  unsigned previous=~0u;
  for(uint64_t cycle=0;cycle<limit && !Verilated::gotFinish();++cycle) {{
+  {uart_tick}
   dut.{clock}=0; dut.eval();
   dut.{clock}=1; dut.eval();
   unsigned value={packed};
@@ -183,6 +219,15 @@ def launch(binary, args, out):
         env['FPGATOOL_SIM_CYCLES'] = str(args.cycles)
     else:
         env.pop('FPGATOOL_SIM_CYCLES', None)
+    if getattr(args, 'uart_file', None):
+        uart_file = Path(args.uart_file).expanduser().resolve()
+        if not uart_file.is_file():
+            raise tool.FPGAToolError(f'UART input file does not exist: {uart_file}')
+        env['FPGATOOL_SIM_UART_FILE'] = str(uart_file)
+        env['FPGATOOL_SIM_UART_BAUD'] = str(args.uart_baud)
+    else:
+        env.pop('FPGATOOL_SIM_UART_FILE', None)
+        env.pop('FPGATOOL_SIM_UART_BAUD', None)
     simulator = viewer = connection = None
     last = None
     count = 0
@@ -219,8 +264,9 @@ def launch(binary, args, out):
                 except queue.Empty:
                     if simulator.poll() is not None:
                         raise tool.FPGAToolError(f'simulator stopped after {count} frames; check --cycles and {out / "receiver.log"}')
-                    if time.monotonic() - last_received > 20:
-                        raise tool.FPGAToolError(f'no VGA frame for 20 seconds; check timing and {out / "receiver.log"}. Unsupported modes/clock primitives can use --sim-backend python')
+                    timeout = 90 if count == 0 else 20
+                    if time.monotonic() - last_received > timeout:
+                        raise tool.FPGAToolError(f'no VGA frame for {timeout} seconds; check timing and {out / "receiver.log"}. Unsupported modes/clock primitives can use --sim-backend python')
                     continue
                 if isinstance(item, Exception):
                     raise tool.FPGAToolError(f'{item}; see {out / "receiver.log"}')

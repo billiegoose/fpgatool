@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -226,6 +227,23 @@ def container_build_dir(board: str, source: Path) -> str:
     return "/workspace/" + build_dir(board, source).relative_to(ROOT).as_posix()
 
 
+def validate_final_timing(log: Path) -> None:
+    """Reject the final pin-constrained route, even if nextpnr exits zero."""
+    if not log.is_file():
+        raise FPGAToolError(f"final routing report is missing: {log}")
+    clocks = {}
+    for name, achieved, status, required in re.findall(
+        r"Max frequency for clock '([^']+)': ([0-9.]+) MHz \((PASS|FAIL) at ([0-9.]+) MHz\)",
+        log.read_text(),
+    ):
+        # Placement estimates precede routed results; keep the last per clock.
+        clocks[name] = (achieved, status, required)
+    failed = [f"{name}: {rate} MHz vs {goal} MHz" for name, (rate, status, goal)
+              in clocks.items() if status == "FAIL"]
+    if failed:
+        raise FPGAToolError(f"final routing misses timing: {'; '.join(failed)}; see {log}")
+
+
 def cmd_build(args: argparse.Namespace) -> Path:
     source = normalize_source(args.source)
     if source.suffix.lower() == ".bit":
@@ -270,6 +288,7 @@ def cmd_build(args: argparse.Namespace) -> Path:
     generated = out_dir / "pipelinec" / "top" / "top.bit"
     if not generated.is_file():
         raise FPGAToolError(f"PipelineC completed without producing expected bitstream: {generated}")
+    validate_final_timing(out_dir / "pipelinec" / "top" / "open_tools_final.log")
     shutil.copy2(generated, final_bit)
     print(f"✓ Built {final_bit.relative_to(ROOT)}")
     return final_bit
@@ -463,6 +482,8 @@ def cmd_sim(args: argparse.Namespace) -> None:
         from simulation.compiled import simulate
         simulate(args, source, pipelinec)
         return
+    if getattr(args, "uart_file", None):
+        raise FPGAToolError("--uart-file requires the HDL simulation backend")
     compat = STATE_DIR / "sim-runtime"
     (compat / "src").mkdir(parents=True, exist_ok=True)
     for name in ("pypeline.py", "PY_TO_LOGIC.py", "OPEN_TOOLS.py", "pypeline_sim.py"):
@@ -546,6 +567,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--cycles", type=positive_int, help="sim: maximum clock events before stopping")
     p.add_argument("--vga-mode", choices=("640x480", "800x600", "1280x720", "1920x1080"), help="sim: override automatically discovered VGA timing")
     p.add_argument("--no-open", action="store_true", help="sim: save frames and exit without opening the monitor")
+    p.add_argument("--uart-file", help="sim: send this file as 8-N-1 serial bits to RsRx (HDL backend)")
+    p.add_argument("--uart-baud", type=positive_int, default=115200, help="sim: UART stimulus baud rate (default: 115200)")
     p.add_argument("--screenshot", help="sim: also save the last complete frame to this PNG path")
     return p
 
