@@ -1,7 +1,8 @@
 """Basys 3 UART -> RED2 text, 1920x1080 VGA at 60 Hz.
 
 115200 baud, 8-N-1. LF starts a new line; CR and unsupported characters are
-ignored. Text wraps at the right margin; an 8 KiB byte buffer feeds a 64-bit compositor and a small pixel FIFO.
+ignored. Backspace (08) and Delete (7F) remove the last buffered byte.
+Text wraps at the right margin; an 8 KiB byte buffer feeds a 64-bit compositor and a small pixel FIFO.
 """
 # pyright: reportInvalidTypeForm=none
 from pypeline import *

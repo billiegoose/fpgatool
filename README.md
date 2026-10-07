@@ -142,19 +142,26 @@ input on the Basys 3 USB-UART bridge and renders RED2 text at 1920×1080,
 60 Hz. It uses the hardware-verified 100 → 135 → 148.5 MHz MMCM chain:
 
 ```sh
-./fpgatool.sh build examples/vga_uart_1920_1080_demo.py
+./fpgatool.sh build examples/vga_uart_1920_1080_demo.py --comb
 ./fpgatool.sh sim examples/vga_uart_1920_1080_capture.py --no-open \
   --uart-file assets/red2-readme-example.txt --frames 3 \
   --screenshot build/vga_uart_readme_1080.png
 ```
 
-The renderer stores incoming UART bytes in an append-only 8 KiB buffer,
+The design supplies its pipeline registers explicitly; `--comb` preserves
+that pipeline. The final pin-constrained route must still meet 148.5 MHz.
+
+The renderer stores incoming UART bytes in an editable 8 KiB buffer,
 including LF. It snapshots the committed byte count once per frame and replays
 the same byte span for every glyph scanline. LF advances to the next text line;
 CR and unsupported bytes are skipped. Text starts at (5, 2), with a 5-pixel
 left/right and 2-pixel top/bottom margin around the entire screen. It uses
 native font pixels and pair kerning, and wraps before the right margin. UART
-TX stays idle. The demo does not scroll or edit text.
+TX stays idle. Backspace (`08`) and Delete (`7F`) remove the last buffered
+byte, including a newline; the next byte replaces it. Backspace at an empty
+buffer does nothing and can free space in a full buffer. The demo does not
+scroll. Edits are reflected by the next frame; removed BRAM bytes are zeroed
+so an in-progress frame cannot reread deleted characters.
 
 Font storage is row-major: a 4096×21-bit ROM holds one complete horizontal
 glyph row per address `(ASCII << 5) | glyph_y`. Separate 128×9-bit metadata and
@@ -198,9 +205,9 @@ font data, rather than the streaming compositor:
   build/vga_uart_readme_1080.png assets/red2-readme-example.txt
 ```
 
-The final Basys 3 route meets 148.5 MHz at 179.86 MHz. It uses four RAMB36
+The final Basys 3 route meets 148.5 MHz at 162.81 MHz. It uses four RAMB36
 and five RAMB18 blocks (29.25 KiB, 13% of the board's block RAM). Compiled HDL
-captures match the 335-byte README sample and a 307-byte border/wrapping stress
+captures match the 335-byte README sample and a 174-byte backspace/wrapping stress
 input exactly. The build command also checks the final pin-constrained timing
 report before publishing its bitstream; a failing final route is rejected even
 when nextpnr exits successfully.
@@ -227,8 +234,9 @@ configuration; activity and write indicators stay lit until then.
 With LD11 off, check the host port and serial connection. LD11 on with LD12 off
 means activity reached RX but no valid byte was decoded; check 115200 baud,
 8-N-1, and disabled flow control. LD12 on with LD14 off means bytes arrived but
-have not been committed to the text buffer. LD15 means configuration must be
-reloaded to start a fresh screen; the demo does not scroll or clear.
+have not been committed to the text buffer. LD15 means the buffer is full;
+Backspace can free space, or reloading the configuration starts a fresh screen.
+The demo does not scroll or provide a clear-screen command.
 
 To type into the 1080p UART demo (`examples/vga_uart_1920_1080_demo.py`), connect
 with `tio`:

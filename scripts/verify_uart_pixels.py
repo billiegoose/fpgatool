@@ -10,6 +10,15 @@ from hardware.red2_uart_data import COLUMNS, DESCRIPTORS, ADVANCES
 
 
 def expected_pixels(text, width=1920, height=1080, margin_x=5, margin_y=2):
+    # Apply the UART storage edits before independently laying out font columns.
+    buffered = bytearray()
+    for code in text:
+        if code in (8, 127):
+            if buffered:
+                buffered.pop()
+        elif len(buffered) < 8192:
+            buffered.append(code)
+    text = buffered
     pixels = bytearray(width * height)
     right, bottom = width - margin_x, height - margin_y
     y, previous, previous_x = margin_y, None, margin_x

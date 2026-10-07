@@ -12,6 +12,7 @@ from vga.types import vga_12bpp_t
 from hardware.font_row_rom import make_font_row_rom
 from hardware.red2_row_data import ROW_BITMAPS, METADATA, KERNING
 from hardware.uart_rx import make_uart_rx, uart_rx_t
+from hardware.uart_text_buffer import make_uart_text_writer
 
 WIDTH = 1920
 HEIGHT = 1080
@@ -22,6 +23,7 @@ TEXT_BOTTOM = HEIGHT - MARGIN_Y
 BYTE_CAPACITY = 8192
 _timing = make_vga_timing(VGA_1920_1080, v_start=1124)
 _receive = make_uart_rx(148.5)
+_edit = make_uart_text_writer(BYTE_CAPACITY)
 _bytes, _bytes_t = make_ram(uint8_t, BYTE_CAPACITY, ports=("w", "r"), read_latency=1)
 _rows = make_font_row_rom(ROW_BITMAPS)
 _meta, _meta_t = make_ram(uint9_t, 128, ports=("r",), read_latency=1, init=METADATA)
@@ -64,7 +66,8 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     received = _receive(rx)
     sig = _timing()
     written: Reg[uint14_t] = 0
-    wr_en: uint1_t = received.valid & (written < BYTE_CAPACITY)
+    edit = _edit(received, written)
+    wr_en: uint1_t = edit.committed
 
     snapshot_end: Reg[uint14_t] = 0
     # Loader reads the committed frame snapshot, never the same-cycle update.
@@ -82,7 +85,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     mail: Reg[glyph_row_t]
     mail_valid: Reg[uint1_t] = 0
 
-    chars = _bytes(_bytes.p0_in_t(addr=written[12:0], wr_data=received.data,
+    chars = _bytes(_bytes.p0_in_t(addr=edit.address[12:0], wr_data=edit.data,
                                 wr_en=wr_en, valid=1),
                    _bytes.p1_in_t(addr=read_index[12:0], valid=1))
     row_addr: uint12_t = (uint12_t(lookup_code) << 5) | uint12_t(glyph_y[4:0])
@@ -278,7 +281,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
             load_state = 2
 
     if wr_en:
-        written = written + 1
+        written = edit.tail
 
     # FWFT presents the next packed word before it is needed. The consumer
     # pops once per eight visible pixels and shifts one palette index per tick.
