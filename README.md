@@ -163,9 +163,14 @@ buffer does nothing and can free space in a full buffer. The demo does not
 scroll. Edits are reflected by the next frame; removed BRAM bytes are zeroed
 so an in-progress frame cannot reread deleted characters.
 
-Font storage is row-major: a 4096×21-bit ROM holds one complete horizontal
-glyph row per address `(ASCII << 5) | glyph_y`. Separate 128×9-bit metadata and
-16384×4-bit kerning tables provide widths and placement. A 64-bit compositor
+Font storage is row-major and dictionary-compressed. The current font has 253
+unique 21-bit row patterns, including dictionary entry 0 for blank. Each glyph
+stores only the rows between its first and last inked scanlines: 1,253 cropped
+rows occupy a 2048×8-bit index ROM, feeding a 256×21-bit dictionary ROM. The
+128×31-bit glyph metadata stores width, top_y, cropped height, base row address,
+validity, and the backtracking guard. A scanline outside the cropped height
+supplies blank ink without changing glyph width or placement; spaces have zero
+stored rows. Kerning remains a separate 16384×4-bit table. A 64-bit compositor
 ORs each incoming row into unfinished ink and emits only pixels that no future
 glyph can affect. The generated metadata retains a backtracking guard; all
 guards are zero with the current nonnegative pair advances.
@@ -173,12 +178,17 @@ guards are zero with the current nonnegative pair advances.
 The loader remembers the two previous supported glyphs, their widths, and
 absolute origins. It places each new glyph at the maximum origin required by
 both pair advances, preserving earlier spacing through tucked punctuation such
-as `P.O.` and `F.T`. Two read ports use the same kerning ROM. History starts
-empty for each scanline replay at the current text line's first byte, so LF,
-wrapping, and backspace retain their existing behavior. There is no placement
-cache. Font generation exhaustively checks every four-glyph combination to
-prove that two-glyph history is sufficient at spacing 4; an incompatible font
-is rejected before updating the ROM constants.
+as `P.O.` and `F.T`. Two read ports use the same kerning ROM. The loader
+registers `base + glyph_y - top_y`, reads its dictionary index, then reads the
+21-bit pattern. These add two stages to the original loader; kerning runs in
+parallel. Prefetching the next UART byte during lookup and decoding it when the
+mailbox is consumed keeps the steady-state interval at six clocks per glyph,
+preserving the original loader throughput. History starts empty for each
+scanline replay at the current text line's first byte, so LF, wrapping, and
+backspace retain their existing behavior. There is no placement cache. Font
+generation exhaustively checks every four-glyph combination to prove that two-
+glyph history is sufficient at spacing 4; an incompatible font is rejected
+before updating the ROM constants.
 
 Eight settled pixels are mapped to four-bit palette indices and packed into
 one 32-bit FIFO word. The circular FIFO has eight memory words; including its
@@ -215,12 +225,14 @@ font data, rather than the streaming compositor:
   build/vga_uart_readme_1080.png assets/red2-readme-example.txt
 ```
 
-The final Basys 3 route meets 148.5 MHz at 149.79 MHz. It uses four RAMB36
-and five RAMB18 blocks (29.25 KiB, 13% of the board's block RAM). Compiled HDL
-captures match the 335-byte README sample and a 609-byte punctuation/wrapping/backspace
-stress input exactly. The build command also checks the final pin-constrained timing
-report before publishing its bitstream; a failing final route is rejected even
-when nextpnr exits successfully.
+The final Basys 3 route meets 148.5 MHz at 166.33 MHz. It uses four RAMB36 and
+two RAMB18 blocks (22.5 KiB, 10% of the board's block RAM), down from 29.25 KiB
+before font compression. Font row storage falls from five RAMB18 blocks to two.
+Compiled HDL captures match the 335-byte README sample, a 609-byte
+punctuation/wrapping/backspace stress input, and a 1,579-byte all-glyph/cropped-
+row/dense-kerning input exactly. The build command also checks the final pin-
+constrained timing report before publishing its bitstream; a failing final route
+is rejected even when nextpnr exits successfully.
 
 The board demo also exposes UART diagnostics from the same receiver used by
 the renderer. The seven-segment display reads `CCBB`: received-byte count modulo

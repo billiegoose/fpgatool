@@ -48,7 +48,7 @@ def main():
         lines.append(')\n')
     output = ROOT / 'examples/hardware/red2_uart_data.py'
     output.write_text('\n'.join(lines))
-    # Row-major scanout data: one horizontal glyph row per ROM word.
+    # Crop vertical blank margins and dictionary-code row-major scanout data.
     # Compute how far any future glyph can reach back from this glyph's origin.
     # Retain explicit guards even though this font now has nonnegative advances.
     future = {code: 0 for code in glyphs}
@@ -60,26 +60,50 @@ def main():
         future = bounds
     else:
         raise ValueError('Kerning has a negative cycle; finite streaming lookahead is impossible')
-    rows, metadata, kerns = [0] * 4096, [0] * 128, [0] * 16384
-    for code, glyph in glyphs.items():
+    row_indices, dictionary = [], [0]
+    row_ids = {0: 0}
+    metadata, kerns = [0] * 128, [0] * 16384
+    for code, glyph in sorted(glyphs.items()):
         if glyph.width > 21 or -future[code] > 7:
             raise ValueError('Row renderer expects glyphs <=21 pixels and backtracking <=7')
-        metadata[code] = (1 << 8) | (-future[code] << 5) | glyph.width
         alpha = glyph.getchannel('A')
-        for y in range(glyph.height):
-            rows[(code << 5) | y] = sum(bool(alpha.getpixel((x, y))) << x
-                                        for x in range(glyph.width))
+        bounds = alpha.getbbox()
+        top_y, height = (bounds[1], bounds[3] - bounds[1]) if bounds else (0, 0)
+        base = len(row_indices)
+        if base >= 2048:
+            raise ValueError('Glyph base exceeds eleven-bit addresses')
+        metadata[code] = ((base << 20) | (top_y << 15) | (height << 9)
+                          | (1 << 8) | (-future[code] << 5) | glyph.width)
+        for y in range(top_y, top_y + height):
+            bits = sum(bool(alpha.getpixel((x, y))) << x for x in range(glyph.width))
+            if bits not in row_ids:
+                row_ids[bits] = len(dictionary)
+                dictionary.append(bits)
+            row_indices.append(row_ids[bits])
         for right in glyphs:
             kern = glyph.width + 4 - advances[(code << 7) | right]
             if not 0 <= kern <= 15:
                 raise ValueError('Kerning adjustment must fit four unsigned bits')
             kerns[(code << 7) | right] = kern
+    if len(dictionary) > 256:
+        raise ValueError('Row dictionary exceeds eight-bit indices')
+    if len(row_indices) > 2048:
+        raise ValueError('Cropped rows exceed eleven-bit addresses')
+    # Physical ROM depths are powers of two. Dictionary entry zero is always blank.
+    cropped_rows = len(row_indices)
+    row_depth = 1 << max(1, (cropped_rows - 1).bit_length())
+    row_indices.extend([0] * (row_depth - len(row_indices)))
+    print(f'Compressed rows: {len(dictionary)} distinct patterns, '
+          f'{cropped_rows} cropped rows, {row_depth} x 8-bit index ROM')
     row_lines = ['"""Raw RED2 row-major font ROMs for the streaming pixel engine.',
-                 'Row address = (ASCII << 5) | glyph_y; bit 0 is the left pixel.',
-                 'Metadata: valid[8], future backtrack[7:5], width[4:0].',
+                 'Row address = base + glyph_y - top_y, only within cropped height.',
+                 'ROW_DICTIONARY[ROW_INDICES[address]]; bit 0 is the left pixel.',
+                 'Metadata: base[30:20], top_y[19:15], height[14:9],',
+                 'valid[8], future backtrack[7:5], width[4:0].',
                  'Pair step = current width + 4 - KERNING[(current << 7) | next].',
                  'Regenerate with scripts/generate_uart_font.py.', '"""', '']
-    for name, values in [('ROW_BITMAPS', rows), ('METADATA', metadata), ('KERNING', kerns)]:
+    for name, values in [('ROW_DICTIONARY', dictionary), ('ROW_INDICES', row_indices),
+                         ('METADATA', metadata), ('KERNING', kerns)]:
         row_lines.append(name + ' = (')
         for start in range(0, len(values), 16):
             row_lines.append('    ' + ', '.join(map(str, values[start:start+16])) + ',')

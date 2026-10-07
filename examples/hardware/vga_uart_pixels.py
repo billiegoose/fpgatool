@@ -10,7 +10,7 @@ from fifo import make_fifo
 from vga.timing import VGA_1920_1080, make_vga_timing
 from vga.types import vga_12bpp_t
 from hardware.font_row_rom import make_font_row_rom
-from hardware.red2_row_data import ROW_BITMAPS, METADATA, KERNING
+from hardware.red2_row_data import ROW_DICTIONARY, ROW_INDICES, METADATA, KERNING
 from hardware.uart_rx import make_uart_rx, uart_rx_t
 from hardware.uart_text_buffer import make_uart_text_writer
 
@@ -25,8 +25,10 @@ _timing = make_vga_timing(VGA_1920_1080, v_start=1124)
 _receive = make_uart_rx(148.5)
 _edit = make_uart_text_writer(BYTE_CAPACITY)
 _bytes, _bytes_t = make_ram(uint8_t, BYTE_CAPACITY, ports=("w", "r"), read_latency=1)
-_rows = make_font_row_rom(ROW_BITMAPS)
-_meta, _meta_t = make_ram(uint9_t, 128, ports=("r",), read_latency=1, init=METADATA)
+_rows = make_font_row_rom(ROW_DICTIONARY)
+_row_indices, _row_indices_t = make_ram(uint8_t, len(ROW_INDICES), ports=("r",),
+                                      read_latency=1, init=ROW_INDICES)
+_meta, _meta_t = make_ram(uint31_t, 128, ports=("r",), read_latency=1, init=METADATA)
 _kern, _kern_t = make_ram(uint4_t, 16384, ports=("r", "r"), read_latency=1, init=KERNING)
 # Eight packed pixels per word; eight memory words plus the FWFT output word.
 # Including the consumer shift register, storage is at most 80 upcoming pixels.
@@ -74,9 +76,14 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     row_snapshot_end: uint14_t = snapshot_end
     row_blank: Reg[uint1_t] = 1
     glyph_y: Reg[uint6_t] = 0
+    row_glyph_y: uint6_t = glyph_y
     line_start: Reg[uint14_t] = 0
     line_end: Reg[uint14_t] = 0
     read_index: Reg[uint14_t] = 0
+    byte_read_index: Reg[uint13_t] = 0
+    following_index: Reg[uint14_t] = 0
+    at_end: Reg[uint1_t] = 1
+    next_at_end: Reg[uint1_t] = 1
     lookup_code: Reg[uint7_t] = 0
     previous_code: Reg[uint7_t] = 0
     previous_width: Reg[uint5_t] = 0
@@ -89,15 +96,17 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     step_older: Reg[int7_t] = 0
     candidate_previous: Reg[int13_t] = MARGIN_X
     candidate_older: Reg[int13_t] = MARGIN_X
-    load_state: Reg[uint3_t] = 0
+    load_state: Reg[uint4_t] = 0
+    row_addr: Reg[uint11_t] = 0
+    row_ink: Reg[uint1_t] = 0
     mail: Reg[glyph_row_t]
     mail_valid: Reg[uint1_t] = 0
 
     chars = _bytes(_bytes.p0_in_t(addr=edit.address[12:0], wr_data=edit.data,
                                 wr_en=wr_en, valid=1),
-                   _bytes.p1_in_t(addr=read_index[12:0], valid=1))
-    row_addr: uint12_t = (uint12_t(lookup_code) << 5) | uint12_t(glyph_y[4:0])
-    row = _rows(_rows.p0_in_t(addr=row_addr, valid=1))
+                   _bytes.p1_in_t(addr=byte_read_index, valid=1))
+    row_index = _row_indices(_row_indices.p0_in_t(addr=row_addr, valid=1))
+    row = _rows(_rows.p0_in_t(addr=row_index.p0.rd_data, valid=1))
     meta = _meta(_meta.p0_in_t(addr=lookup_code, valid=1))
     pair_addr: uint14_t = (uint14_t(previous_code) << 7) | uint14_t(lookup_code)
     older_pair_addr: uint14_t = (uint14_t(older_code) << 7) | uint14_t(lookup_code)
@@ -234,6 +243,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     # and kerning lookup overlap the run generator's current-row work.
     if reset_request:
         read_index = restart_index
+        byte_read_index = uint13_t(restart_index)
         history_count = 0
         previous_origin = MARGIN_X
         older_origin = MARGIN_X
@@ -247,9 +257,12 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         mail_valid = 0
         load_state = 0
     elif load_state == 1:
+        at_end = read_index >= row_snapshot_end
         load_state = 2
-    elif load_state == 2:
-        if read_index >= row_snapshot_end:
+    elif (load_state == 2) | ((load_state == 6) & take_mail):
+        # Decode the next byte as the mailbox is consumed. This overlaps the
+        # added ROM stages and keeps a six-clock glyph initiation interval.
+        if at_end:
             mail = glyph_row_t(bits=0, width=0, backtrack=0, origin=0,
                                index=read_index, after=row_snapshot_end, kind=2)
             mail_valid = 1
@@ -261,13 +274,25 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
             load_state = 6
         elif (chars.p1.rd_data >= 32) & (chars.p1.rd_data < 128):
             lookup_code = chars.p1.rd_data[6:0]
+            # Prefetch the following byte throughout the font lookup, so
+            # even an immediately consumed mailbox can decode it correctly.
+            byte_read_index = uint13_t(read_index + 1)
             load_state = 3
         else:
+            byte_read_index = uint13_t(read_index + 1)
             read_index = read_index + 1
             load_state = 1
     elif load_state == 3:
+        following_index = read_index + 1
         load_state = 4
     elif load_state == 4:
+        # Metadata -> cropped row address is a registered pipeline stage.
+        top_y: uint6_t = uint6_t(meta.p0.rd_data[19:15])
+        height: uint6_t = meta.p0.rd_data[14:9]
+        row_ink = (row_glyph_y >= top_y) & (row_glyph_y < (top_y + height))
+        # Out-of-crop reads may wrap within the index ROM; their ink is masked
+        # at the mailbox. Keep the crop comparison off the address path.
+        row_addr = meta.p0.rd_data[30:20] + uint11_t(row_glyph_y - top_y)
         # Two read ports supply independent pair bounds from the same ROM.
         step_previous = int7_t(previous_width) + 4 - int7_t(kern.p0.rd_data)
         step_older = int7_t(older_width) + 4 - int7_t(kern.p1.rd_data)
@@ -278,15 +303,23 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         candidate_older = older_origin + int13_t(step_older)
         load_state = 7
     elif load_state == 7:
+        # Index ROM -> dictionary ROM. Its registered read settles before
+        # the following mailbox stage. Kerning runs in parallel.
+        next_at_end = following_index >= row_snapshot_end
+        load_state = 8
+    elif load_state == 8:
         if meta.p0.rd_data[8]:
             origin: int13_t = MARGIN_X
             if history_count != 0:
                 origin = candidate_previous
             if (history_count == 2) & (candidate_older > origin):
                 origin = candidate_older
-            mail = glyph_row_t(bits=row.p0.rd_data, width=meta.p0.rd_data[4:0],
+            bits: uint21_t = 0
+            if row_ink:
+                bits = row.p0.rd_data
+            mail = glyph_row_t(bits=bits, width=meta.p0.rd_data[4:0],
                                backtrack=meta.p0.rd_data[7:5], origin=origin,
-                               index=read_index, after=read_index + 1, kind=0)
+                               index=read_index, after=following_index, kind=0)
             mail_valid = 1
             older_code = previous_code
             older_width = previous_width
@@ -299,12 +332,8 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
             load_state = 6
         else:
             load_state = 1
-        read_index = read_index + 1
-    elif load_state == 6:
-        if take_mail:
-            # The byte RAM has already been reading the next byte while the
-            # current mailbox waits, so no additional address wait is needed.
-            load_state = 2
+        read_index = following_index
+        at_end = next_at_end
 
     if wr_en:
         written = edit.tail
