@@ -114,24 +114,37 @@ def main():
         raise ValueError('Row dictionary exceeds eight-bit indices')
     if len(row_indices) > 2048:
         raise ValueError('Cropped rows exceed eleven-bit addresses')
-    # Physical ROM depths are powers of two. Dictionary entry zero is always blank.
-    cropped_rows = len(row_indices)
-    row_depth = 1 << max(1, (cropped_rows - 1).bit_length())
-    row_indices.extend([0] * (row_depth - len(row_indices)))
-    print(f'Compressed rows: {len(dictionary)} distinct patterns, '
-          f'{cropped_rows} cropped rows, {row_depth} x 8-bit index ROM')
+    # Dictionary bytes precede cropped row IDs in one 2048-byte image. A
+    # 1024 x 16-bit dual-port ROM fetches any three-byte pattern in two words.
+    index_base = 3 * len(dictionary)
+    font_bytes = [byte for bits in dictionary for byte in
+                  (bits & 255, (bits >> 8) & 255, (bits >> 16) & 255)]
+    font_bytes.extend(row_indices)
+    if len(font_bytes) > 2048:
+        raise ValueError('Dictionary and cropped indices exceed one 2048-byte ROM')
+    for code in codes:
+        base = (metadata[code] >> 20) & 2047
+        if base + index_base >= 2048:
+            raise ValueError('Packed glyph base exceeds eleven-bit addresses')
+        metadata[code] += index_base << 20
+    print(f'Packed font: {len(dictionary)} patterns, {len(row_indices)} cropped rows, '
+          f'{len(font_bytes)} bytes in a 1024 x 16-bit ROM')
+    font_bytes.extend([0] * (2048 - len(font_bytes)))
+    font_words = [font_bytes[i] | (font_bytes[i + 1] << 8) for i in range(0, 2048, 2)]
     row_lines = ['"""Raw RED2 row-major font ROMs for the streaming pixel engine.',
                  'Row address = base + glyph_y - top_y, only within cropped height.',
-                 'ROW_DICTIONARY[ROW_INDICES[address]]; bit 0 is the left pixel.',
+                 'FONT_WORDS packs little-endian bytes: three per dictionary pattern, then row IDs.',
+                 'Metadata base is a byte address in this combined ROM; bit 0 is the left pixel.',
                  'Metadata: right class[42:37], left class[36:31], base[30:20],',
                  'top_y[19:15], height[14:9],',
                  'valid[8], future backtrack[7:5], width[4:0].',
                  'KERNING[left_class * KERNING_RIGHT_COUNT + right_class] is a four-bit adjustment.',
                  'Pair step = previous width + 4 - adjustment.',
                  'Regenerate with scripts/generate_uart_font.py.', '"""', '',
-                 f'KERNING_LEFT_COUNT = {left_count}', f'KERNING_RIGHT_COUNT = {right_count}', '']
-    for name, values in [('ROW_DICTIONARY', dictionary), ('ROW_INDICES', row_indices),
-                         ('METADATA', metadata), ('KERNING', class_kerns)]:
+                 f'KERNING_LEFT_COUNT = {left_count}', f'KERNING_RIGHT_COUNT = {right_count}',
+                 f'FONT_DICTIONARY_COUNT = {len(dictionary)}',
+                 f'FONT_INDEX_BASE = {index_base}', f'FONT_ROW_COUNT = {len(row_indices)}', '']
+    for name, values in [('FONT_WORDS', font_words), ('METADATA', metadata), ('KERNING', class_kerns)]:
         row_lines.append(name + ' = (')
         for start in range(0, len(values), 16):
             row_lines.append('    ' + ', '.join(map(str, values[start:start+16])) + ',')

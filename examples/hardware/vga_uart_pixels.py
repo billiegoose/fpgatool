@@ -10,7 +10,7 @@ from fifo import make_fifo
 from vga.timing import VGA_1920_1080, make_vga_timing
 from vga.types import vga_12bpp_t
 from hardware.font_row_rom import make_font_row_rom
-from hardware.red2_row_data import (ROW_DICTIONARY, ROW_INDICES, METADATA, KERNING,
+from hardware.red2_row_data import (FONT_WORDS, METADATA, KERNING,
                                     KERNING_LEFT_COUNT, KERNING_RIGHT_COUNT)
 from hardware.uart_rx import make_uart_rx, uart_rx_t
 from hardware.uart_text_buffer import make_uart_text_writer
@@ -26,9 +26,7 @@ _timing = make_vga_timing(VGA_1920_1080, v_start=1124)
 _receive = make_uart_rx(148.5)
 _edit = make_uart_text_writer(BYTE_CAPACITY)
 _bytes, _bytes_t = make_ram(uint8_t, BYTE_CAPACITY, ports=("w", "r"), read_latency=1)
-_rows = make_font_row_rom(ROW_DICTIONARY)
-_row_indices, _row_indices_t = make_ram(uint8_t, len(ROW_INDICES), ports=("r",),
-                                      read_latency=1, init=ROW_INDICES)
+_font = make_font_row_rom(FONT_WORDS)
 _meta, _meta_t = make_ram(uint43_t, 128, ports=("r",), read_latency=1, init=METADATA)
 # Pad the compact class table to a 64-column stride: two six-bit IDs are the
 # address. Both histories read the same 4096 x 4-bit dual-port block ROM.
@@ -105,14 +103,21 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     load_state: Reg[uint4_t] = 0
     row_addr: Reg[uint11_t] = 0
     row_ink: Reg[uint1_t] = 0
+    dictionary_a: Reg[uint10_t] = 0
+    dictionary_b: Reg[uint10_t] = 1
+    pattern_odd: Reg[uint1_t] = 0
+    glyph_origin: Reg[int13_t] = MARGIN_X
     mail: Reg[glyph_row_t]
     mail_valid: Reg[uint1_t] = 0
 
     chars = _bytes(_bytes.p0_in_t(addr=edit.address[12:0], wr_data=edit.data,
                                 wr_en=wr_en, valid=1),
                    _bytes.p1_in_t(addr=byte_read_index, valid=1))
-    row_index = _row_indices(_row_indices.p0_in_t(addr=row_addr, valid=1))
-    row = _rows(_rows.p0_in_t(addr=row_index.p0.rd_data, valid=1))
+    font_a: uint10_t = dictionary_a
+    if load_state == 5:
+        font_a = row_addr[10:1]
+    font = _font(_font.p0_in_t(addr=font_a, valid=1),
+                 _font.p1_in_t(addr=dictionary_b, valid=1))
     meta = _meta(_meta.p0_in_t(addr=lookup_code, valid=1))
     pair_addr: uint12_t = (uint12_t(previous_class) << 6) | uint12_t(meta.p0.rd_data[42:37])
     older_pair_addr: uint12_t = (uint12_t(older_class) << 6) | uint12_t(meta.p0.rd_data[42:37])
@@ -155,6 +160,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     stop_loader = 0
     restart_index: uint14_t = line_start
     take_mail: uint1_t = (state == 1) & mail_valid
+    mail_available: uint1_t = (~mail_valid) | take_mail
 
     if state == 0:
         window = 0
@@ -266,8 +272,8 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         at_end = read_index >= row_snapshot_end
         load_state = 2
     elif (load_state == 2) | ((load_state == 6) & take_mail):
-        # Decode the next byte as the mailbox is consumed. This overlaps the
-        # added ROM stages and keeps a six-clock glyph initiation interval.
+        # Normal decode path for the first byte and newline/end/unsupported
+        # boundaries. Supported glyphs predecode at mailbox publication below.
         if at_end:
             mail = glyph_row_t(bits=0, width=0, backtrack=0, origin=0,
                                index=read_index, after=row_snapshot_end, kind=2)
@@ -296,7 +302,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         top_y: uint6_t = uint6_t(meta.p0.rd_data[19:15])
         height: uint6_t = meta.p0.rd_data[14:9]
         row_ink = (row_glyph_y >= top_y) & (row_glyph_y < (top_y + height))
-        # Out-of-crop reads may wrap within the index ROM; their ink is masked
+        # Out-of-crop reads may wrap within the font ROM; their ink is masked
         # at the mailbox. Keep the crop comparison off the address path.
         row_addr = meta.p0.rd_data[30:20] + uint11_t(row_glyph_y - top_y)
         load_state = 5
@@ -310,22 +316,38 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         # Register the additions separately from the maximum and mailbox mux.
         candidate_previous = previous_origin + int13_t(step_previous)
         candidate_older = older_origin + int13_t(step_older)
-        # Index ROM -> dictionary ROM. Its registered read settles before
-        # the following mailbox stage. Kerning runs in parallel.
+        # The index byte arrived in one half of the sixteen-bit word.
+        row_id: uint8_t = font.p0.rd_data[7:0]
+        if row_addr[0]:
+            row_id = font.p0.rd_data[15:8]
+        # floor(3 * row_id / 2): dictionary starts at byte zero. Both read
+        # ports cover the three-byte pattern, even when it starts at odd byte.
+        word_base: uint10_t = uint10_t(row_id) + uint10_t(row_id >> 1)
+        dictionary_a = word_base
+        # a - ~b == a + b + 1 (mod 1024). This gives the second address
+        # its own carry-in-one adder, instead of incrementing the first sum.
+        dictionary_b = uint10_t(row_id) - (~uint10_t(row_id >> 1))
+        pattern_odd = row_id[0]
         next_at_end = following_index >= row_snapshot_end
         load_state = 8
     elif load_state == 8:
+        # Dictionary words are being read. Resolve placement in parallel.
+        glyph_origin = MARGIN_X
+        if history_count != 0:
+            glyph_origin = candidate_previous
+        if (history_count == 2) & (candidate_older > glyph_origin):
+            glyph_origin = candidate_older
+        load_state = 9
+    elif (load_state == 9) & mail_available:
         if meta.p0.rd_data[8]:
-            origin: int13_t = MARGIN_X
-            if history_count != 0:
-                origin = candidate_previous
-            if (history_count == 2) & (candidate_older > origin):
-                origin = candidate_older
             bits: uint21_t = 0
             if row_ink:
-                bits = row.p0.rd_data
+                joined: uint32_t = uint32_t(font.p0.rd_data) | (uint32_t(font.p1.rd_data) << 16)
+                bits = uint21_t(joined)
+                if pattern_odd:
+                    bits = uint21_t(joined >> 8)
             mail = glyph_row_t(bits=bits, width=meta.p0.rd_data[4:0],
-                               backtrack=meta.p0.rd_data[7:5], origin=origin,
+                               backtrack=meta.p0.rd_data[7:5], origin=glyph_origin,
                                index=read_index, after=following_index, kind=0)
             mail_valid = 1
             older_class = previous_class
@@ -333,7 +355,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
             older_origin = previous_origin
             previous_class = meta.p0.rd_data[36:31]
             previous_width = meta.p0.rd_data[4:0]
-            previous_origin = origin
+            previous_origin = glyph_origin
             if history_count < 2:
                 history_count = history_count + 1
             load_state = 6
@@ -341,6 +363,13 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
             load_state = 1
         read_index = following_index
         at_end = next_at_end
+        # Start the following supported byte while this row waits in the
+        # mailbox. The next publication stalls if that mailbox is still full.
+        # This hides the added address stage: six clocks per glyph steady-state.
+        if (~next_at_end) & (chars.p1.rd_data >= 32) & (chars.p1.rd_data < 128):
+            lookup_code = chars.p1.rd_data[6:0]
+            byte_read_index = uint13_t(following_index + 1)
+            load_state = 3
 
     if wr_en:
         written = edit.tail

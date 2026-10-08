@@ -6,9 +6,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'examples'))
 sys.path.insert(0, str(ROOT / 'scripts'))
 from kerning_history import verify_two_glyph_history
-from hardware.red2_row_data import (ROW_DICTIONARY, ROW_INDICES, METADATA, KERNING,
+from hardware.red2_row_data import (FONT_WORDS, FONT_DICTIONARY_COUNT, FONT_INDEX_BASE, FONT_ROW_COUNT, METADATA, KERNING,
                                     KERNING_LEFT_COUNT, KERNING_RIGHT_COUNT)
 from hardware.red2_uart_data import COLUMNS, DESCRIPTORS, ADVANCES
+
+
+FONT_BYTES = tuple(byte for word in FONT_WORDS for byte in (word & 255, word >> 8))
+DICTIONARY = tuple(sum(FONT_BYTES[3 * index + b] << (8 * b) for b in range(3))
+                   for index in range(FONT_DICTIONARY_COUNT))
 
 
 class Red2RowsTests(unittest.TestCase):
@@ -34,31 +39,41 @@ class Red2RowsTests(unittest.TestCase):
             self.assertEqual(bool(meta & 256), bool(desc & (1 << 18)))
             self.assertEqual(meta & 31, width)
             self.assertLessEqual(top_y + height, 32)
-            self.assertLessEqual(row_base + height, len(ROW_INDICES))
+            self.assertLessEqual(row_base + height, FONT_INDEX_BASE + FONT_ROW_COUNT)
             for y in range(32):
                 expected = sum(((COLUMNS[base + x] >> y) & 1) << x for x in range(width))
                 actual = 0
                 if top_y <= y < top_y + height:
-                    actual = ROW_DICTIONARY[ROW_INDICES[row_base + y - top_y]]
+                    actual = DICTIONARY[FONT_BYTES[row_base + y - top_y]]
                 self.assertEqual(actual, expected, (chr(code), y))
             if height:
-                self.assertNotEqual(ROW_DICTIONARY[ROW_INDICES[row_base]], 0)
-                self.assertNotEqual(ROW_DICTIONARY[ROW_INDICES[row_base + height - 1]], 0)
+                self.assertNotEqual(DICTIONARY[FONT_BYTES[row_base]], 0)
+                self.assertNotEqual(DICTIONARY[FONT_BYTES[row_base + height - 1]], 0)
 
     def test_dictionary_and_cropped_storage_bounds(self):
-        self.assertEqual(ROW_DICTIONARY[0], 0)
-        self.assertEqual(len(ROW_DICTIONARY), 253)
-        self.assertEqual(len(set(ROW_DICTIONARY)), len(ROW_DICTIONARY))
-        self.assertTrue(all(0 <= bits < (1 << 21) for bits in ROW_DICTIONARY))
-        self.assertTrue(all(0 <= index < len(ROW_DICTIONARY) for index in ROW_INDICES))
-        self.assertEqual(len(ROW_INDICES), 2048)
-        end = 0
+        self.assertEqual(FONT_DICTIONARY_COUNT, 253)
+        self.assertEqual(FONT_INDEX_BASE, 3 * FONT_DICTIONARY_COUNT)
+        self.assertEqual(FONT_ROW_COUNT, 1253)
+        self.assertEqual(len(FONT_WORDS), 1024)
+        self.assertTrue(all(0 <= word < (1 << 16) for word in FONT_WORDS))
+        self.assertEqual(DICTIONARY[0], 0)
+        self.assertEqual(len(set(DICTIONARY)), FONT_DICTIONARY_COUNT)
+        self.assertTrue(all(0 <= bits < (1 << 21) for bits in DICTIONARY))
+        end = FONT_INDEX_BASE
         for meta in METADATA:
             if meta & 256:
                 self.assertEqual((meta >> 20) & 2047, end)
                 end += (meta >> 9) & 63
-        self.assertEqual(end, 1253)
-        self.assertTrue(all(index == 0 for index in ROW_INDICES[end:]))
+        self.assertEqual(end, 2012)
+        self.assertTrue(all(index < FONT_DICTIONARY_COUNT for index in FONT_BYTES[FONT_INDEX_BASE:end]))
+        self.assertTrue(all(byte == 0 for byte in FONT_BYTES[end:]))
+
+    def test_two_word_fetch_reconstructs_every_dictionary_pattern(self):
+        for index, expected in enumerate(DICTIONARY):
+            address = index + (index >> 1)
+            joined = FONT_WORDS[address] | (FONT_WORDS[address + 1] << 16)
+            actual = (joined >> (8 * (index & 1))) & ((1 << 21) - 1)
+            self.assertEqual(actual, expected)
 
     def test_independent_left_and_right_kerning_classes(self):
         self.assertEqual((KERNING_LEFT_COUNT, KERNING_RIGHT_COUNT), (55, 51))
