@@ -296,6 +296,77 @@ seven-segment display and `ABC` on VGA. Replace the port with the board's curren
 UART device. Add `--delay-ms 10` to compare paced bytes against the default
 continuous stream while diagnosing reception.
 
+### Anti-aliased 1080p UART demo
+
+`examples/vga_uart_1920_1080_aa_demo.py` is the four-shade version of the
+binary demo. It shares the UART editing, margins, wrapping, and diagnostics.
+Both demos retain a character buffer and a small pixel FIFO, with no framebuffer.
+
+```sh
+./fpgatool.sh build examples/vga_uart_1920_1080_aa_demo.py --comb
+./fpgatool.sh load build/basys3/vga_uart_1920_1080_aa_demo/vga_uart_1920_1080_aa_demo.bit
+./fpgatool.sh sim examples/vga_uart_1920_1080_aa_capture.py --no-open \
+  --uart-file assets/red2-readme-example.txt --frames 3 \
+  --screenshot build/vga_uart_aa_readme_1080.png
+```
+
+Font storage is row-major and dictionary-compressed. The anti-aliased font has
+463 unique 42-bit patterns, including blank at dictionary entry 0. Each pixel
+is a two-bit palette index. A 512×42-bit block ROM stores patterns; a separate
+2048×9-bit ROM holds the 1,253 cropped row indices. Metadata base addresses
+point into that index ROM. The 128×43-bit glyph metadata stores width, top_y,
+cropped height, base row address, validity, backtracking guard, and separate
+six-bit left/right kerning class IDs. Scanlines outside the cropped height
+supply blank ink without changing placement; spaces have zero stored rows.
+The font's fitted sRGB palette is `(0, 59, 198, 255)`, rounded to
+`(0, 51, 204, 255)` on the Basys 3's four-bit-per-channel VGA DAC
+(channel codes `0, 3, 12, 15`).
+Kerning uses 55 left classes (identical adjustment rows) and 51 right classes
+(identical adjustment columns). The generated table has 55×51 four-bit entries;
+the hardware pads to a 64-column stride in a 4096×4-bit dual-port ROM, allowing
+addressing as `(left_class << 6) | right_class`. Class mappings share the
+metadata read, so they require no separate block RAM. Font generation verifies
+every supported ASCII pair retains exactly the original adjustment. A 128-bit
+compositor takes the brighter two-bit value at each overlapping pixel and
+emits only pixels that no future glyph can affect. The generated metadata retains a backtracking guard;
+all guards are zero with the current nonnegative pair advances.
+
+`examples/vga_uart_1920_1080_aa_capture.py` supplies an ideal 148.5 MHz clock to
+the same UART/video core used by the board demo, since the compiled backend
+does not simulate MMCMs. `--uart-file` drives actual 8-N-1 serial bits into
+`RsRx`; `--uart-baud` defaults to 115200. Three frames allow the complete
+README sample to arrive and a stable frame to be captured.
+
+The checked-in font data comes directly from raw Aseprite slices and the
+adjacent font's `antialias_font.compile_glyph()` implementation, independent
+of R2BF. Regenerate the row ROMs, column data for verification, and README
+sample from the adjacent `red2-font` checkout (requires Aseprite and its Pillow
+environment):
+
+```sh
+../red2-font/.venv/bin/python scripts/generate_uart_aa_font.py
+```
+
+Capture verification uses an independent renderer based on the column-major
+font data, rather than the streaming compositor:
+
+```sh
+../red2-font/.venv/bin/python scripts/verify_uart_aa_pixels.py \
+  build/vga_uart_aa_readme_1080.png assets/red2-readme-example.txt
+```
+
+The final anti-aliased Basys 3 route meets 148.5 MHz at 164.26 MHz. It uses
+three RAMB36 and two RAMB18 blocks (18 KiB, 8% of the board's block RAM),
+compared with 13.5 KiB for the binary font and 29.25 KiB before compression.
+The demo retains the character buffer and small pixel FIFO; there is no
+framebuffer. Compiled HDL capture verification checks the fitted
+shades rounded to the board's VGA DAC, using independent column-major data
+and full kerning history. The 335-byte README sample, 609-byte
+punctuation/wrapping/backspace stress input, and 1,579-byte all-glyph and
+dense-kerning input all match exactly. The build command checks the final pin-constrained
+timing report before publishing its bitstream; a failing final route is
+rejected even when nextpnr exits successfully.
+
 ## Example structure
 
 Top-level `examples/*.py` files are complete board-facing designs: they own `@MAIN` entry points and physical board interfaces. Reusable, board-agnostic hardware functions live under `examples/hardware/` and contain neither `@MAIN` declarations nor `board.*` imports. `examples/kitchen_sink_demo.py` demonstrates composition by combining the LED/seven-segment chaser, UART echo, VGA test bars, and mouse cursor blocks in one design.
