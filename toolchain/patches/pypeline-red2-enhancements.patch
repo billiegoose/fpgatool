@@ -1,6 +1,6 @@
 --- a/src/PY_TO_LOGIC.py
 +++ b/src/PY_TO_LOGIC.py
-@@ -3836,6 +3836,314 @@
+@@ -3871,6 +3871,314 @@
              iteration += 1
          self.loop_instance_prefix = outer_prefix
  
@@ -315,7 +315,7 @@
      def _elab_if(self, stmt):
          """if condition: ... else: ...
  
-@@ -3854,6 +4162,12 @@
+@@ -3889,6 +4197,12 @@
              coverage read enumerates all concrete positions and assembles them into
              mux_type via CONST_REF_RD assembly (_assemble_var_ref_coverage).
          """
@@ -328,46 +328,6 @@
          # ── Compile-time constant: branch elimination ──
          cond_val = self._try_eval_const(stmt.test)
          if cond_val is not None:
-@@ -4232,12 +4546,16 @@
-         # 2. Elaboration const_env — Python name (const_env uses original Python names)
-         if python_name in self.const_env:
-             return self._elab_python_value(self.const_env[python_name], expr)
--        # 3. Global wire (Wire[T]/Input[T]/Output[T] declared at module level)
--        # — lazy read init. Resolve this before ordinary module globals because
--        # make_clock() deliberately leaves an _ClockMarker object bound to the
--        # Python name while _discover_global_wires registers that same name as a
--        # hardware signal. The hardware declaration must win when the name is
--        # referenced from hardware code.
-+        # 3. Module globals (N, M, etc.) — emit as CONST wire if used as hardware value
-+        if python_name in self.module_globals:
-+            val = self.module_globals[python_name]
-+            if isinstance(val, (int, bool)):
-+                return self._elab_python_value(val, expr)
-+            raise ElaborationError(
-+                f"Module global '{python_name}' ({type(val).__name__}) "
-+                f"is not a hardware-usable value"
-+            )
-+        # 4. Global wire (Wire[T] declared at module level) — lazy read init
-         # _resolve_global_wire handles both direct names and module-prefixed names
-         # for sub-file functions (e.g. bare 'main_a_in' -> 'file_a_main_a_in').
-         global_key = self._resolve_global_wire(python_name)
-@@ -4247,16 +4565,6 @@
-             if _is_scalar(typ, self.parser_state):
-                 return wire, typ
-             return self._read_ref((global_key,), typ, expr)
--        # 4. Ordinary module globals (N, M, etc.) — emit as CONST wire if used as
--        # a hardware value.
--        if python_name in self.module_globals:
--            val = self.module_globals[python_name]
--            if isinstance(val, (int, bool)):
--                return self._elab_python_value(val, expr)
--            raise ElaborationError(
--                f"Module global '{python_name}' ({type(val).__name__}) "
--                f"is not a hardware-usable value"
--            )
-         raise ElaborationError(
-             f"Unknown name '{python_name}' in func '{self.func_name}'"
-         )
 --- a/include/pypeline/operators/soft_cmp.py
 +++ b/include/pypeline/operators/soft_cmp.py
 @@ -344,7 +344,7 @@
