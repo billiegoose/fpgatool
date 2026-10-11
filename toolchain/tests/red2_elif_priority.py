@@ -55,10 +55,11 @@ def general_elif_priority():
     enable: uint1_t = (n >> 3) & 1
     signed_value: int8_t = int8_t(n) - 16
     wide: uint16_t = uint16_t(n) * 17
-    truthy: uint1_t = (wide > 0) and (wide < 256)
+    # The real != and generated truthiness != share the right operand's span.
+    truthy: uint1_t = (wide > 0) and (case != 7)
     signed_lt: uint1_t = signed_value < 0
     wide_gt: uint1_t = wide > 255
-    sim_assert(truthy == ((n > 0) & (n < 16)))
+    sim_assert(truthy == ((n > 0) & (case != 7)))
     sim_assert(signed_lt == (n < 16))
     sim_assert(wide_gt == (n >= 16))
 
