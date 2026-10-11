@@ -1,0 +1,38 @@
+--- a/src/PY_TO_LOGIC.py
++++ b/src/PY_TO_LOGIC.py
+@@ -2130,6 +2130,9 @@
+ 
+     def _inst(self, op_full_name, node):
+         """Build a unique submodule instance name, prepending any active loop prefix."""
++        generated_tag = getattr(node, "_pypeline_generated_inst_tag", None)
++        if generated_tag is not None:
++            op_full_name = f"{op_full_name}_{generated_tag}"
+         return self.loop_instance_prefix + _inst_name(op_full_name, self.src_file, node)
+ 
+     def _make_eval_ns(self):
+@@ -4747,17 +4750,21 @@
+ 
+         bin_op = ast.BitAnd() if isinstance(expr.op, ast.And) else ast.BitOr()
+ 
+-        def wrap_neq0(node):
++        def wrap_neq0(node, operand_index):
+             n = ast.Compare(
+                 left=node, ops=[ast.NotEq()], comparators=[ast.Constant(value=0)]
+             )
+             ast.copy_location(n, node)
+             ast.fix_missing_locations(n)
++            # Synthetic truthiness comparisons can have the same source span as
++            # a real comparison nested inside this BoolOp. Tag the generated
++            # comparison so the two hardware instances cannot collide.
++            n._pypeline_generated_inst_tag = f"boolop_{operand_index}"
+             return n
+ 
+-        synth = wrap_neq0(expr.values[0])
+-        for v in expr.values[1:]:
+-            rhs = wrap_neq0(v)
++        synth = wrap_neq0(expr.values[0], 0)
++        for operand_index, v in enumerate(expr.values[1:], 1):
++            rhs = wrap_neq0(v, operand_index)
+             synth = ast.BinOp(left=synth, op=bin_op, right=rhs)
+             ast.copy_location(synth, v)
+             ast.fix_missing_locations(synth)
