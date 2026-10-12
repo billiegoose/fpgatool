@@ -24,6 +24,7 @@
               ./patches/openxc7-xdc-pullup-normalization.patch
               ./patches/openxc7-mmcm-fasm-with-tests.patch
               ./patches/openxc7-resume-delay-matrix.patch
+              ./patches/openxc7-sdp72-write-width.patch
             ];
           });
 

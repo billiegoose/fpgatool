@@ -70,3 +70,28 @@ NEXTPNR_RESUME_TEST_BIN=/path/to/bin/nextpnr-himbaechel \
 NEXTPNR_RESUME_TEST_CHIPDB=/path/to/xc7a35tcpg236.bin \
 python3 tests/test_nextpnr_resume_delay_matrix.py
 ```
+
+## RAMB36E1 wide SDP writes
+
+`openxc7-sdp72-write-width.patch` configures `WRITE_WIDTH_A_18` on both physical
+RAMB18 halves when a RAMB36E1 uses `WRITE_WIDTH_B=72` and leaves `WRITE_WIDTH_A=0`.
+The existing writer already handles the corresponding wide-read partner and
+RAMB18E1 wide writes, but omitted this RAMB36E1 write case. The missing markers
+leave part of the memory at its narrow default despite a legal route.
+
+The opt-in `tests/test_nextpnr_sdp72_write_width.py` synthesizes a 512-by-64-bit
+RAM and routes it on the Basys 3 package. It requires A and B write-width markers
+on both halves. The previous backend fails the A-marker assertion; the patched
+backend passes. The two saved-placement delay-model regressions also pass on
+the rebuilt backend.
+
+On Asgard's physical RED2 design, adding the 14 missing configuration bits for
+seven affected memories changed a 131-word graph-memory test from 74 mismatches
+to zero. This establishes that memory-write correction; the complete RED2
+application replay still requires separate verification.
+
+```sh
+NEXTPNR_RESUME_TEST_BIN=/path/to/bin/nextpnr-himbaechel \
+NEXTPNR_RESUME_TEST_CHIPDB=/path/to/xc7a35tcpg236.bin \
+python3 tests/test_nextpnr_sdp72_write_width.py
+```
