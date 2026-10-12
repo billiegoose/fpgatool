@@ -19,6 +19,14 @@ The pair replaces Asgard's former combined `red2-enhancements.patch`; do not
 apply that combined patch as well. Updating the fork's default branch does not
 update either project's pinned compiler.
 
+`pypeline-register-reannotations.patch` applies after that pair. A later
+`r: T = value` must write an existing `Reg[T]`, preserving its stored value on
+other clocks. Declaring it again as a combinational local dropped RED2's saved
+primitive flag. The patch also rejects an annotation with a conflicting type.
+The regression below exercises scalar and struct register re-annotations and
+holds their values across disabled cycles. The old compiler fails at cycle 3;
+the patched compiler matches all 31 native/VHDL rows and reaches `sim_finish`.
+
 The upstream port drops the old name-resolution compatibility hunks because
 upstream already has the resulting lookup order, including support for injected
 design parameters. Priority selection, clock-enable gating, and software
@@ -36,3 +44,5 @@ python toolchain/tests/check_red2_compiler.py \
 
 Pass `--nvc-command 'podman run ... nvc'` to use a container with the output
 directory mounted at the same absolute path used by the runner.
+Alternatively, pass `--ghdl-command 'podman run ... ghdl'`; the runner checks
+GHDL's explicit finish marker and the same trace rows.

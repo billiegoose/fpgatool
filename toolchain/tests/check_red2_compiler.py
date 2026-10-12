@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--compiler", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--nvc-command", default="nvc")
+    parser.add_argument("--ghdl-command")
     args = parser.parse_args()
     compiler = args.compiler.absolute()
     out = args.out.absolute()
@@ -69,12 +70,18 @@ begin
   dut: entity work.top port map(clk_None => clk);
 end;
 """)
-    nvc = shlex.split(args.nvc_command) + ["--std=2008"]
-    run(nvc + ["-a", *map(str, ordered), str(tb)], out / "analyze.log")
-    run(nvc + ["-e", "red2_elif_tb"], out / "elaborate.log")
-    vhdl = run(nvc + ["-r", "red2_elif_tb", "--stop-time=1us", "--exit-severity=error"],
+    def simulator(action, *arguments):
+        if args.ghdl_command:
+            return shlex.split(args.ghdl_command) + [action, "--std=08", *arguments]
+        return shlex.split(args.nvc_command) + ["--std=2008", action, *arguments]
+
+    run(simulator("-a", *map(str, ordered), str(tb)), out / "analyze.log")
+    run(simulator("-e", "red2_elif_tb"), out / "elaborate.log")
+    severity = "--assert-level=error" if args.ghdl_command else "--exit-severity=error"
+    vhdl = run(simulator("-r", "red2_elif_tb", "--stop-time=1us", severity),
                out / "vhdl.log")
-    assert "FINISH called" in vhdl, "HDL did not reach sim_finish"
+    finish = "simulation finished" if args.ghdl_command else "FINISH called"
+    assert finish in vhdl, "HDL did not reach sim_finish"
     pattern = r"^\[SIM DEBUG PRINT:.*?\]: (general_elif_priority.*)$"
     native_rows = re.findall(pattern, native, re.M)
     vhdl_rows = re.findall(pattern, vhdl, re.M)

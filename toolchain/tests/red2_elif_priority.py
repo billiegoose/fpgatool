@@ -51,8 +51,29 @@ NUM_CYCLES = 32
 @MAIN
 def general_elif_priority():
     n: Reg[uint8_t]
+    held: Reg[uint8_t]
+    expected_held: Reg[uint8_t]
+    held_pair: Reg[elif_pair_t]
+    expected_pair: Reg[elif_pair_t]
+    held_before: uint8_t = held
+    expected_before: uint8_t = expected_held
+    pair_before: elif_pair_t = held_pair
+    expected_pair_before: elif_pair_t = expected_pair
+    sim_assert(held_before == expected_before)
+    sim_assert(pair_before.a == expected_pair_before.a)
+    sim_assert(pair_before.b == expected_pair_before.b)
     case: uint8_t = n & 7
     enable: uint1_t = (n >> 3) & 1
+    if case == 2:
+        # A repeated annotation writes the existing register. It must not
+        # redeclare a combinational local or clear the held value on other clocks.
+        held: uint8_t = n + 5
+        expected_held = n + 5
+        held_pair: elif_pair_t = elif_pair_t(a=n, b=n + 1)
+        expected_pair = elif_pair_t(a=n, b=n + 1)
+    sim_assert(held == expected_held)
+    sim_assert(held_pair.a == expected_pair.a)
+    sim_assert(held_pair.b == expected_pair.b)
     signed_value: int8_t = int8_t(n) - 16
     wide: uint16_t = uint16_t(n) * 17
     # The real != and generated truthiness != share the right operand's span.
@@ -136,7 +157,8 @@ def general_elif_priority():
             f"general_elif_priority n={n} en={enable} case={case} "
             f"x={x} y={y} z={z} pa={p.a} pb={p.b} "
             f"a0={arr[0]} a1={arr[1]} a2={arr[2]} "
-            f"truthy={truthy} signed_lt={signed_lt} wide_gt={wide_gt}",
+            f"truthy={truthy} signed_lt={signed_lt} wide_gt={wide_gt} "
+            f"held_before={held_before} held={held} paira={held_pair.a} pairb={held_pair.b}",
             debug=True,
         )
     if n == NUM_CYCLES - 1:

@@ -1,0 +1,23 @@
+--- a/src/PY_TO_LOGIC.py
++++ b/src/PY_TO_LOGIC.py
+@@ -3509,7 +3509,19 @@
+         typ = _annotation_to_ctype(
+             stmt.annotation, self._make_eval_ns(), self.parser_state
+         )
+-        self._declare_var(var_name, typ, stmt.target)
++        if var_name in self.logic.state_regs:
++            # Python annotations do not introduce a new local scope. A later
++            # `r: T = value` writes the existing Reg[T], preserving its current
++            # value on paths that do not execute the assignment. Redeclaring it
++            # as a zero-driven local severs the register's read/next-state path.
++            declared = self.logic.state_regs[var_name].type_name
++            if typ != declared:
++                raise ElaborationError(
++                    f"'{var_name}': annotated register assignment has type "
++                    f"'{typ}', expected '{declared}'", stmt.annotation
++                )
++        else:
++            self._declare_var(var_name, typ, stmt.target)
+         if stmt.value is not None:
+             if isinstance(stmt.value, (ast.Dict, ast.List)):
+                 self._elab_compound_init(var_name, stmt.value, stmt.value)
