@@ -1,0 +1,19 @@
+--- a/himbaechel/uarch/xilinx/xilinx.cc
++++ b/himbaechel/uarch/xilinx/xilinx.cc
+@@ -792,6 +792,16 @@
+ void XilinxImpl::preRoute()
+ {
+     if (!cell_tags_set) {
++        // A pre-placed JSON import skips prePlace(), including its measured
++        // delay model. Restore the same model/options before A* routing;
++        // otherwise resumed designs silently fall back to the formula.
++        const ArchArgs &dm_args = ctx->args;
++        std::string dm = dm_args.options.count("delay-matrix") ? dm_args.options["delay-matrix"].as<std::string>() : "build";
++        if (dm != "off") {
++            if (dm != "build")
++                ctx->settings[ctx->id("xilinx/delayMatrixFile")] = dm;
++            build_delay_matrix();
++        }
+         // We loaded a pre-placed design. Need to set tags and update bel-cell map
+         assign_cell_tags();
+         index_control_sets();

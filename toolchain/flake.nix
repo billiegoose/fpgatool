@@ -17,12 +17,13 @@
           tc = openxc7.packages.${system};
           py = pkgs.python312Packages;
 
-          # Carry the two openXC7 fixes validated by fpgatool until the pinned
+          # Carry the openXC7 fixes validated by fpgatool until the pinned
           # toolchain-nix nextpnr revision contains them upstream.
           nextpnrPatched = tc.nextpnr.overrideAttrs (old: {
             patches = (old.patches or [ ]) ++ [
               ./patches/openxc7-xdc-pullup-normalization.patch
               ./patches/openxc7-mmcm-fasm-with-tests.patch
+              ./patches/openxc7-resume-delay-matrix.patch
             ];
           });
 

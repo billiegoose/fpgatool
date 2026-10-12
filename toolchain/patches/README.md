@@ -46,3 +46,27 @@ Pass `--nvc-command 'podman run ... nvc'` to use a container with the output
 directory mounted at the same absolute path used by the runner.
 Alternatively, pass `--ghdl-command 'podman run ... ghdl'`; the runner checks
 GHDL's explicit finish marker and the same trace rows.
+
+## Saved-placement Xilinx routing
+
+`openxc7-resume-delay-matrix.patch` restores measured interconnect delays when
+nextpnr imports a placed JSON design and routes with `--no-pack --no-place`.
+The original Xilinx backend initializes this model in `prePlace()` only;
+resuming skips that method and silently uses the fallback formula. The patch
+initializes the same model and options in the preplaced `preRoute()` path.
+It preserves `-o delay-matrix=off` and cached-matrix options. Circuit logic and
+component locations are unchanged.
+
+The opt-in regression maps and places a small counter, then routes its saved
+placement with the model enabled and explicitly disabled. Both routes must
+complete and meet timing. The enabled test fails on the previous backend
+because the resumed route never initializes the measured model.
+
+Inside a shell providing Yosys and the pinned chip database, use the raw
+Himbächel executable (not the compatibility wrapper):
+
+```sh
+NEXTPNR_RESUME_TEST_BIN=/path/to/bin/nextpnr-himbaechel \
+NEXTPNR_RESUME_TEST_CHIPDB=/path/to/xc7a35tcpg236.bin \
+python3 tests/test_nextpnr_resume_delay_matrix.py
+```
