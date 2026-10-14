@@ -33,6 +33,11 @@ class PixelClockTests(unittest.TestCase):
         self.assertEqual(gen.input_mhz, 100)
         self.assertEqual(gen.output_mhz, 148.5)
 
+    def test_720p_60hz_pixel_clock(self):
+        gen = clock.make_mmcm_clock(100, clock.MmcmStage(27, 4, 5), clock.MmcmStage(11, 2, 10))
+        self.assertEqual(gen.input_mhz, 100)
+        self.assertEqual(gen.output_mhz, 74.25)
+
     def test_other_integer_pixel_rates(self):
         for divide, expected in [(32, 25), (20, 40), (16, 50)]:
             with self.subTest(expected=expected):

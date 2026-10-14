@@ -119,6 +119,7 @@ use the native Python backend:
 
 ```sh
 ./fpgatool.sh sim examples/vga_800_600_test_bars.py --sim-backend python
+./fpgatool.sh sim examples/vga_1280_720_test_bars.py --sim-backend python
 ./fpgatool.sh sim examples/vga_1920_1080_test_bars.py --sim-backend python
 ```
 
@@ -404,6 +405,19 @@ and 1056x628 total pixels, giving approximately 60.32 Hz refresh. A single
 `MmcmStage(8, 1, 20)` generates 40 MHz from the board's 100 MHz oscillator
 with an 800 MHz VCO. The pixel domain waits for synchronized MMCM lock before
 advancing its timing counters, using the same clock interface as the 1080p example.
+
+### 1280x720 VGA test bars
+
+```sh
+./fpgatool.sh build examples/vga_1280_720_test_bars.py
+```
+
+This example uses Pypeline's `VGA_1280_720` timing preset: 1280x720 at
+60 Hz, with 1650x750 total pixels and a 74.25 MHz pixel clock. Two integer
+MMCM stages generate the pixel clock from the Basys 3's 100 MHz oscillator:
+100 -> 135 -> 74.25 MHz, using `MmcmStage(27, 4, 5)` followed by
+`MmcmStage(11, 2, 10)`. The rendering, clock-lock synchronization, and VGA
+pin mapping are shared with the 1080p example.
 
 ### 1920x1080 VGA test bars
 
