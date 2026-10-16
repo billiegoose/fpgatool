@@ -95,3 +95,18 @@ NEXTPNR_RESUME_TEST_BIN=/path/to/bin/nextpnr-himbaechel \
 NEXTPNR_RESUME_TEST_CHIPDB=/path/to/xc7a35tcpg236.bin \
 python3 tests/test_nextpnr_sdp72_write_width.py
 ```
+# BUFG route-through FASM completion
+
+The compatibility front-end also runs `../compat/complete-bufg-fasm.py` after
+FASM export. The pinned router can traverse unused BUFGCTRL I0-to-O connections
+while routing ordinary data. Its FASM writer emits their routing but omits the
+buffer configuration because there is no placed BUFG cell. A routed Basys 3
+RED2 image consequently lost a graph-RAM address bit: its low-word writes
+aliased addresses separated by 16. The same image worked after enabling the
+13 implicit buffers, with no HDL, placement or routing changes.
+
+The helper emits the same static I0 configuration as an ordinary BUFG, leaves
+placed/gated buffers unchanged, and rejects unqualified I1 or control-pin modes.
+It produces a hash-stamped report of every added feature. This is an exporter
+compatibility correction; the cached backend and chip database remain unchanged.
+

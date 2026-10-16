@@ -115,3 +115,7 @@ fi
 # Do not exec: returning through this shell guarantees the EXIT trap removes a
 # translated temporary XDC on both successful and failing backend invocations.
 "$REAL" "${ARGS[@]}"
+if [ -n "$FASM" ]; then
+    python3 "${BASH_SOURCE[0]%/*}/complete-bufg-fasm.py" \
+        --input "$FASM" --output "$FASM" --report "${FASM}.bufg.json"
+fi

@@ -37,6 +37,7 @@
           } ''
             mkdir -p $out/bin
             cp ${./compat/nextpnr-xilinx} $out/bin/nextpnr-xilinx
+            cp ${./compat/complete-bufg-fasm.py} $out/bin/complete-bufg-fasm.py
             chmod +x $out/bin/nextpnr-xilinx
             substituteInPlace $out/bin/nextpnr-xilinx \
               --replace-fail '__FPGATOOL_REAL_NEXTPNR_HIMBAECHEL__' '${nextpnrPatched}/bin/nextpnr-himbaechel'
