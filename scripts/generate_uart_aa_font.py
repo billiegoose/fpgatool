@@ -5,6 +5,7 @@ import ast
 from pathlib import Path
 import sys
 from kerning_history import verify_two_glyph_history
+from font_glyph_ids import assign_glyph_ids
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,13 +18,13 @@ def main():
     sys.path.insert(0, str(args.font_dir.resolve()))
     from render_font import load_glyphs, AutoKerning
     from antialias_font import compile_glyph, FITTED_PALETTE
-    glyphs = load_glyphs(args.font_dir / 'RED2 Font.aseprite', args.aseprite)
+    glyphs, unicode_codepoints = assign_glyph_ids(load_glyphs(args.font_dir / 'RED2 Font.aseprite', args.aseprite))
     kerning = AutoKerning(glyphs, spacing=4)
     aa_glyphs = {code: compile_glyph(glyph) for code, glyph in glyphs.items()}
-    columns, aa_columns, descriptors, advances = [], [], [0] * 128, [0] * 16384
+    columns, aa_columns, descriptors, advances = [], [], [0] * 256, [0] * (256 * 256)
     for code, glyph in sorted(glyphs.items()):
-        if not 0 <= code < 128 or glyph.height > 32 or glyph.width > 255:
-            raise ValueError('Expected ASCII glyphs at most 255 x 32 pixels')
+        if not 0 <= code < 256 or glyph.height > 32 or glyph.width > 255:
+            raise ValueError('Expected glyph IDs 0..255, at most 255 x 32 pixels')
         descriptors[code] = len(columns) | (glyph.width << 10) | (1 << 18)
         alpha = glyph.getchannel('A')
         columns.extend(sum(bool(alpha.getpixel((x, y))) << y for y in range(glyph.height))
@@ -38,14 +39,15 @@ def main():
             advance = kerning.advance(left, right)
             if not -64 <= advance < 64:
                 raise ValueError('Pair advance exceeds seven signed bits')
-            advances[(left << 7) | right] = advance
-    checked = verify_two_glyph_history(advances, sorted(glyphs))
+            advances[(left << 8) | right] = advance
+    checked = verify_two_glyph_history(advances, sorted(glyphs), stride=256)
     print(f'Two-glyph history verified across {checked:,} combinations at spacing 4')
     lines = ['"""Generated from raw RED2 Aseprite slices; no R2BF dependency.',
              'Descriptor: valid bit 18, width bits 17:10, base column bits 9:0.',
-             'Advance index: (previous ASCII << 7) | current ASCII.',
+             'Advance index: (previous glyph ID << 8) | current glyph ID.',
              'Bitmap bit 0 is the top pixel. Regenerate with scripts/generate_uart_aa_font.py.',
              '"""', '']
+    lines.append('UNICODE_CODEPOINTS = ' + repr(unicode_codepoints) + '\n')
     for name, values in [('DESCRIPTORS', descriptors), ('COLUMNS', columns), ('AA_COLUMNS', aa_columns), ('ADVANCES', advances)]:
         lines.append(name + ' = (')
         for start in range(0, len(values), 16):
@@ -58,7 +60,7 @@ def main():
     # Retain explicit guards even though this font now has nonnegative advances.
     future = {code: 0 for code in glyphs}
     for iteration in range(len(glyphs)):
-        bounds = {left: min(0, min(advances[(left << 7) | right] + future[right]
+        bounds = {left: min(0, min(advances[(left << 8) | right] + future[right]
                                    for right in glyphs)) for left in glyphs}
         if bounds == future:
             break
@@ -67,7 +69,7 @@ def main():
         raise ValueError('Kerning has a negative cycle; finite streaming lookahead is impossible')
     row_indices, dictionary = [], [0]
     row_ids = {0: 0}
-    metadata, kerns = [0] * 128, [0] * 16384
+    metadata, kerns = [0] * 256, [0] * (256 * 256)
     for code, glyph in sorted(glyphs.items()):
         if glyph.width > 21 or -future[code] > 7:
             raise ValueError('Row renderer expects glyphs <=21 pixels and backtracking <=7')
@@ -86,17 +88,17 @@ def main():
                 dictionary.append(bits)
             row_indices.append(row_ids[bits])
         for right in glyphs:
-            kern = glyph.width + 4 - advances[(code << 7) | right]
+            kern = glyph.width + 4 - advances[(code << 8) | right]
             if not 0 <= kern <= 15:
                 raise ValueError('Kerning adjustment must fit four unsigned bits')
-            kerns[(code << 7) | right] = kern
+            kerns[(code << 8) | right] = kern
     # Group full kerning rows and columns independently, over supported glyphs.
     codes = sorted(glyphs)
     left_groups, right_groups = {}, {}
     left_ids, right_ids = {}, {}
     for code in codes:
-        row_key = tuple(kerns[(code << 7) | right] for right in codes)
-        col_key = tuple(kerns[(left << 7) | code] for left in codes)
+        row_key = tuple(kerns[(code << 8) | right] for right in codes)
+        col_key = tuple(kerns[(left << 8) | code] for left in codes)
         left_ids[code] = left_groups.setdefault(row_key, len(left_groups))
         right_ids[code] = right_groups.setdefault(col_key, len(right_groups))
     left_count, right_count = len(left_groups), len(right_groups)
@@ -106,7 +108,7 @@ def main():
     for left in codes:
         for right in codes:
             address = left_ids[left] * right_count + right_ids[right]
-            value = kerns[(left << 7) | right]
+            value = kerns[(left << 8) | right]
             if class_kerns[address] is not None and class_kerns[address] != value:
                 raise ValueError('Kerning classes do not preserve pair adjustments')
             class_kerns[address] = value
@@ -136,7 +138,8 @@ def main():
                  'Regenerate with scripts/generate_uart_aa_font.py.', '"""', '',
                  f'KERNING_LEFT_COUNT = {left_count}', f'KERNING_RIGHT_COUNT = {right_count}',
                  f'FONT_DICTIONARY_COUNT = {dictionary_count}',
-                 f'FONT_ROW_COUNT = {cropped_count}', f'FONT_PALETTE = {FITTED_PALETTE!r}', '']
+                 f'FONT_ROW_COUNT = {cropped_count}', f'FONT_PALETTE = {FITTED_PALETTE!r}',
+                   f'UNICODE_CODEPOINTS = {unicode_codepoints!r}', '']
     for name, values in [('ROW_DICTIONARY', dictionary), ('ROW_INDICES', row_indices),
                          ('METADATA', metadata), ('KERNING', class_kerns)]:
         row_lines.append(name + ' = (')
@@ -154,7 +157,7 @@ def main():
             break
     else:
         raise ValueError('Could not find the README example text')
-    print(f'Generated {len(glyphs)} glyphs, {len(columns)} columns and ASCII pair advances: {output}')
+    print(f'Generated {len(glyphs)} glyphs, {len(columns)} columns and glyph-ID pair advances: {output}')
 
 
 if __name__ == '__main__':

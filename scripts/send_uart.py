@@ -42,7 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', required=True)
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument('--text', help='ASCII text to send verbatim')
+    source.add_argument('--text', help='UTF-8 text to send verbatim')
     source.add_argument('--file', type=Path, help='Send the exact bytes of this file')
     parser.add_argument('--newline', action='store_true', help='Append LF')
     parser.add_argument('--delay-ms', type=float, default=0,
@@ -51,7 +51,7 @@ def main():
     if args.delay_ms < 0:
         parser.error('--delay-ms must be nonnegative')
     try:
-        payload = args.file.read_bytes() if args.file else args.text.encode('ascii')
+        payload = args.file.read_bytes() if args.file else args.text.encode('utf-8')
         if args.newline:
             payload += b'\n'
         send(args.port, payload, args.delay_ms)

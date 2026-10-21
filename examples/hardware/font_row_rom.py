@@ -1,13 +1,13 @@
 # pyright: reportInvalidTypeForm=none
-"""Combined font bytes: dual-port 1024 x 16-bit, one-cycle block ROM."""
+"""Combined dictionary and 9-bit row IDs: dual-port 2048 x 16-bit ROM."""
 from pypeline import *
 from ram import make_ram, RamConfig, ram_vhdl_text, ram_model_class
 
 
 def make_font_row_rom(words):
-    reference, out_t = make_ram(uint16_t, 1024, ports=("r", "r"),
+    reference, out_t = make_ram(uint16_t, 2048, ports=("r", "r"),
                               read_latency=1, init=words)
-    cfg = RamConfig("red2_font_row_rom", uint16_t, 1024, ("r", "r"), 1, 0, 0, words, False)
+    cfg = RamConfig("red2_font_row_rom", uint16_t, 2048, ("r", "r"), 1, 0, 0, words, False)
     body = ram_vhdl_text(cfg, handshake=False)
     body = body.replace('\nbegin\n', '\nattribute ram_style : string;\n'
                         'attribute ram_style of ram_mem : signal is "block";\nbegin\n', 1)

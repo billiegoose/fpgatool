@@ -6,15 +6,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'examples'))
 sys.path.insert(0, str(ROOT / 'scripts'))
 from kerning_history import verify_two_glyph_history
-from hardware.red2_aa_row_data import (ROW_DICTIONARY, ROW_INDICES, FONT_DICTIONARY_COUNT, FONT_ROW_COUNT, FONT_PALETTE, METADATA, KERNING,
+from hardware.red2_aa_row_data import (ROW_DICTIONARY, ROW_INDICES, FONT_DICTIONARY_COUNT, FONT_ROW_COUNT, FONT_PALETTE, UNICODE_CODEPOINTS, METADATA, KERNING,
                                     KERNING_LEFT_COUNT, KERNING_RIGHT_COUNT)
 from hardware.red2_aa_uart_data import AA_COLUMNS, DESCRIPTORS, ADVANCES
 
 
 class Red2RowsTests(unittest.TestCase):
     def test_two_glyph_history_dominates_all_older_constraints(self):
-        codes = [c for c in range(128) if METADATA[c] & 256]
-        self.assertEqual(verify_two_glyph_history(ADVANCES, codes), len(codes) ** 4)
+        codes = [c for c in range(256) if METADATA[c] & 256]
+        self.assertEqual(verify_two_glyph_history(ADVANCES, codes, stride=256), len(codes) ** 4)
 
     def test_negative_advance_counterexample_is_rejected(self):
         advances = [0] * 16384
@@ -46,8 +46,8 @@ class Red2RowsTests(unittest.TestCase):
                 self.assertNotEqual(ROW_DICTIONARY[ROW_INDICES[row_base + height - 1]], 0)
 
     def test_dictionary_and_cropped_storage_bounds(self):
-        self.assertEqual(FONT_DICTIONARY_COUNT, 463)
-        self.assertEqual(FONT_ROW_COUNT, 1253)
+        self.assertEqual(FONT_DICTIONARY_COUNT, 477)
+        self.assertEqual(FONT_ROW_COUNT, 1293)
         self.assertEqual(FONT_PALETTE, (0, 59, 198, 255))
         self.assertEqual(len(ROW_DICTIONARY), 512)
         self.assertEqual(len(ROW_INDICES), 2048)
@@ -65,29 +65,31 @@ class Red2RowsTests(unittest.TestCase):
         self.assertTrue(all(row == 0 for row in ROW_DICTIONARY[FONT_DICTIONARY_COUNT:]))
 
     def test_independent_left_and_right_kerning_classes(self):
-        self.assertEqual((KERNING_LEFT_COUNT, KERNING_RIGHT_COUNT), (55, 51))
-        self.assertEqual(len(KERNING), 55 * 51)
+        self.assertEqual((KERNING_LEFT_COUNT, KERNING_RIGHT_COUNT), (59, 55))
+        self.assertEqual(UNICODE_CODEPOINTS, (0x25B2, 0x25B6, 0x25BC, 0x25C0))
+        self.assertTrue(all(METADATA[128+i] & 256 for i in range(4)))
+        self.assertEqual(len(KERNING), 59 * 55)
         self.assertTrue(all(0 <= value < 16 for value in KERNING))
-        codes = [c for c in range(128) if METADATA[c] & 256]
+        codes = [c for c in range(256) if METADATA[c] & 256]
         left_ids = [(METADATA[c] >> 31) & 63 for c in codes]
         right_ids = [(METADATA[c] >> 37) & 63 for c in codes]
-        self.assertEqual(set(left_ids), set(range(55)))
-        self.assertEqual(set(right_ids), set(range(51)))
+        self.assertEqual(set(left_ids), set(range(59)))
+        self.assertEqual(set(right_ids), set(range(55)))
         self.assertTrue(all(0 <= meta < (1 << 43) for meta in METADATA))
-        rows = [tuple(KERNING[a * 51:(a + 1) * 51]) for a in range(55)]
-        columns = [tuple(KERNING[a * 51 + b] for a in range(55)) for b in range(51)]
-        self.assertEqual(len(set(rows)), 55)
-        self.assertEqual(len(set(columns)), 51)
+        rows = [tuple(KERNING[a * 55:(a + 1) * 55]) for a in range(59)]
+        columns = [tuple(KERNING[a * 55 + b] for a in range(59)) for b in range(55)]
+        self.assertEqual(len(set(rows)), 59)
+        self.assertEqual(len(set(columns)), 55)
         self.assertEqual((METADATA[ord('A')] >> 31) & 63,
                          (METADATA[ord('Q')] >> 31) & 63)
         self.assertEqual(len({(METADATA[ord(c)] >> 37) & 63 for c in 'CGOQ'}), 1)
 
     def test_future_kerning_cannot_reach_emitted_prefix(self):
-        codes = [c for c in range(128) if METADATA[c] & 256]
+        codes = [c for c in range(256) if METADATA[c] & 256]
         for left in codes:
             guard = (METADATA[left] >> 5) & 7
             for right in codes:
-                advance = ADVANCES[(left << 7) | right]
+                advance = ADVANCES[(left << 8) | right]
                 self.assertEqual((METADATA[left] & 31) + 4 - KERNING[((METADATA[left] >> 31) & 63) * KERNING_RIGHT_COUNT
                                                + ((METADATA[right] >> 37) & 63)], advance)
                 next_guard = (METADATA[right] >> 5) & 7

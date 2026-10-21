@@ -1,8 +1,8 @@
 """Prove that two previous glyphs dominate every older pair constraint."""
 
 
-def verify_two_glyph_history(advances, codes):
-    rows = {code: advances[code << 7:(code + 1) << 7] for code in codes}
+def verify_two_glyph_history(advances, codes, stride=128):
+    rows = {code: advances[code * stride:(code + 1) * stride] for code in codes}
     for a in codes:
         row_a = rows[a]
         for b in codes:

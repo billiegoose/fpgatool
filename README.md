@@ -152,34 +152,38 @@ input on the Basys 3 USB-UART bridge and renders RED2 text at 1920×1080,
 The design supplies its pipeline registers explicitly; `--comb` preserves
 that pipeline. The final pin-constrained route must still meet 148.5 MHz.
 
-The renderer stores incoming UART bytes in an editable 8 KiB buffer,
-including LF. It snapshots the committed byte count once per frame and replays
+The receiver decodes UART UTF-8 into compact single-byte glyph IDs before
+storing them in an editable 8 KiB buffer. ASCII keeps its byte values, while
+`▲` (U+25B2), `▶` (U+25B6), `▼` (U+25BC), and `◀` (U+25C0) map to IDs 128–131.
+Unsupported Unicode is skipped, and backspace removes a whole decoded glyph.
+The buffer includes LF. It snapshots the committed byte count once per frame and replays
 the same byte span for every glyph scanline. LF advances to the next text line;
-CR and unsupported bytes are skipped. Text starts at (5, 2), with a 5-pixel
+CR and unsupported glyphs are skipped. Text starts at (5, 2), with a 5-pixel
 left/right and 2-pixel top/bottom margin around the entire screen. It uses
 native font pixels and pair kerning, and wraps before the right margin. UART
 TX stays idle. Backspace (`08`) and Delete (`7F`) remove the last buffered
-byte, including a newline; the next byte replaces it. Backspace at an empty
+glyph, including a newline; the next byte replaces it. Backspace at an empty
 buffer does nothing and can free space in a full buffer. The demo does not
 scroll. Edits are reflected by the next frame; removed BRAM bytes are zeroed
 so an in-progress frame cannot reread deleted characters.
 
-Font storage is row-major and dictionary-compressed. The font has 253 unique
+Font storage is row-major and dictionary-compressed. The font has 257 unique
 21-bit patterns, including blank at dictionary entry 0. Each pattern occupies
-three little-endian bytes, followed by 1,253 cropped row indices: 759 + 1,253 =
-2,012 bytes. Both tables share one 1024×16-bit dual-port block ROM. Metadata
-base addresses point into the row-index byte region. A pattern occupies two
+three little-endian bytes; the dictionary is padded to 386 sixteen-bit words
+and followed by 1,293 nine-bit cropped row IDs (one per sixteen-bit word).
+Both tables share one 2048×16-bit dual-port block ROM, occupying 1,679 words.
+Metadata base addresses point into the row-index word region. A pattern occupies two
 adjacent sixteen-bit words; both ports read them together, then a byte-alignment
-shift extracts the 21 pixels. The 128×43-bit glyph metadata stores width, top_y,
-cropped height, base byte address, validity, backtracking guard, and separate
+shift extracts the 21 pixels. The 256×43-bit glyph metadata stores width, top_y,
+cropped height, base word address, validity, backtracking guard, and separate
 six-bit left/right kerning class IDs. Scanlines outside the cropped height
 supply blank ink without changing placement; spaces have zero stored rows.
-Kerning uses 55 left classes (identical adjustment rows) and 51 right classes
-(identical adjustment columns). The generated table has 55×51 four-bit entries;
+Kerning uses 59 left classes (identical adjustment rows) and 55 right classes
+(identical adjustment columns). The generated table has 59×55 four-bit entries;
 the hardware pads to a 64-column stride in a 4096×4-bit dual-port ROM, allowing
 addressing as `(left_class << 6) | right_class`. Class mappings share the
 metadata read, so they require no separate block RAM. Font generation verifies
-every supported ASCII pair retains exactly the original adjustment. A 64-bit
+every supported glyph pair retains exactly the original adjustment. A 64-bit
 compositor ORs each incoming row into unfinished ink and emits only pixels that
 no future glyph can affect. The generated metadata retains a backtracking guard;
 all guards are zero with the current nonnegative pair advances.
@@ -188,7 +192,7 @@ The loader remembers the two previous supported glyphs' left classes, widths,
 and absolute origins. It places each new glyph at the maximum origin required by
 both pair advances, preserving spacing through tucked punctuation such as `P.O.`
 and `F.T`. Two read ports use the same kerning ROM. The font loader registers
-the cropped byte address, reads its row ID, registers the two dictionary-word
+the cropped word address, reads its row ID, registers the two dictionary-word
 addresses, then reads and aligns the pattern. Kerning and origin arithmetic run
 in parallel. The next supported character lookup starts when the current row is
 published; publication waits for mailbox space. This preserves six clocks per
@@ -235,16 +239,10 @@ font data, rather than the streaming compositor:
   build/vga_uart_readme_1080.png assets/red2-readme-example.txt
 ```
 
-The final Basys 3 route meets 148.5 MHz at 168.27 MHz. It uses two RAMB36 and
-two RAMB18 blocks (13.5 KiB, 6% of the board's block RAM), down from 15.75 KiB
-before combining the font ROMs, 22.5 KiB with row compression alone, and
-29.25 KiB originally. Font row storage falls from five RAMB18 blocks to one;
-kerning falls from two RAMB36
-blocks to one RAMB18. Compiled HDL captures match the 335-byte README sample, a
-609-byte punctuation/wrapping/backspace stress input, and a 1,579-byte
-all-glyph/cropped-row/dense-kerning input exactly. The build command also
-checks the final pin-constrained timing report before publishing its bitstream;
-a failing final route is rejected even when nextpnr exits successfully.
+The Unicode-capable binary design completes final pin-constrained routing
+at **149.99 MHz**, above the 148.5 MHz pixel-clock target. It uses three
+RAMB36E1 and one RAMB18E1 blocks (15.75 KiB). An actual 1080p HDL capture
+containing `▲▶▼◀` matches the independent column-major renderer pixel-for-pixel.
 
 The board demo also exposes UART diagnostics from the same receiver used by
 the renderer. The seven-segment display reads `CCBB`: received-byte count modulo
@@ -285,10 +283,11 @@ current UART device if needed.
 
 Send hardware test input with a single connection that configures 115200 baud,
 8-N-1 and no flow control before writing. This avoids relying on serial settings
-surviving a port close/reopen. The sender uses Python's standard library:
+surviving a port close/reopen. The sender uses Python's standard library and encodes `--text` as UTF-8:
 
 ```sh
 python3 scripts/send_uart.py --port /dev/cu.usbserial-2101837357871 --text ABC --newline
+python3 scripts/send_uart.py --port /dev/cu.usbserial-2101837357871 --text "▲ ▶ ▼ ◀" --newline
 python3 scripts/send_uart.py --port /dev/cu.usbserial-2101837357871 --file assets/red2-readme-example.txt
 ```
 
@@ -312,22 +311,22 @@ Both demos retain a character buffer and a small pixel FIFO, with no framebuffer
 ```
 
 Font storage is row-major and dictionary-compressed. The anti-aliased font has
-463 unique 42-bit patterns, including blank at dictionary entry 0. Each pixel
+477 unique 42-bit patterns, including blank at dictionary entry 0. Each pixel
 is a two-bit palette index. A 512×42-bit block ROM stores patterns; a separate
-2048×9-bit ROM holds the 1,253 cropped row indices. Metadata base addresses
-point into that index ROM. The 128×43-bit glyph metadata stores width, top_y,
+2048×9-bit ROM holds the 1,293 cropped row indices. Metadata base addresses
+point into that index ROM. The 256×43-bit glyph metadata stores width, top_y,
 cropped height, base row address, validity, backtracking guard, and separate
 six-bit left/right kerning class IDs. Scanlines outside the cropped height
 supply blank ink without changing placement; spaces have zero stored rows.
 The font's fitted sRGB palette is `(0, 59, 198, 255)`, rounded to
 `(0, 51, 204, 255)` on the Basys 3's four-bit-per-channel VGA DAC
 (channel codes `0, 3, 12, 15`).
-Kerning uses 55 left classes (identical adjustment rows) and 51 right classes
-(identical adjustment columns). The generated table has 55×51 four-bit entries;
+Kerning uses 59 left classes (identical adjustment rows) and 55 right classes
+(identical adjustment columns). The generated table has 59×55 four-bit entries;
 the hardware pads to a 64-column stride in a 4096×4-bit dual-port ROM, allowing
 addressing as `(left_class << 6) | right_class`. Class mappings share the
 metadata read, so they require no separate block RAM. Font generation verifies
-every supported ASCII pair retains exactly the original adjustment. A 128-bit
+every supported glyph pair retains exactly the original adjustment. A 128-bit
 compositor takes the brighter two-bit value at each overlapping pixel and
 emits only pixels that no future glyph can affect. The generated metadata retains a backtracking guard;
 all guards are zero with the current nonnegative pair advances.
@@ -356,17 +355,10 @@ font data, rather than the streaming compositor:
   build/vga_uart_aa_readme_1080.png assets/red2-readme-example.txt
 ```
 
-The final anti-aliased Basys 3 route meets 148.5 MHz at 164.26 MHz. It uses
-three RAMB36 and two RAMB18 blocks (18 KiB, 8% of the board's block RAM),
-compared with 13.5 KiB for the binary font and 29.25 KiB before compression.
-The demo retains the character buffer and small pixel FIFO; there is no
-framebuffer. Compiled HDL capture verification checks the fitted
-shades rounded to the board's VGA DAC, using independent column-major data
-and full kerning history. The 335-byte README sample, 609-byte
-punctuation/wrapping/backspace stress input, and 1,579-byte all-glyph and
-dense-kerning input all match exactly. The build command checks the final pin-constrained
-timing report before publishing its bitstream; a failing final route is
-rejected even when nextpnr exits successfully.
+The Unicode-capable anti-aliased design completes final pin-constrained
+routing at **149.03 MHz**, above the 148.5 MHz pixel-clock target. It uses three
+RAMB36E1 and two RAMB18E1 blocks (18 KiB). Its 1080p HDL capture of the same
+UTF-8 triangle input also matches the independent renderer pixel-for-pixel.
 
 ## Example structure
 

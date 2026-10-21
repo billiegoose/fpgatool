@@ -11,9 +11,10 @@ from vga.timing import VGA_1920_1080, make_vga_timing
 from vga.types import vga_12bpp_t
 from hardware.font_row_aa_rom import make_font_row_rom
 from hardware.red2_aa_row_data import (ROW_DICTIONARY, ROW_INDICES, METADATA, KERNING,
-                                    KERNING_LEFT_COUNT, KERNING_RIGHT_COUNT)
+                                    KERNING_LEFT_COUNT, KERNING_RIGHT_COUNT, UNICODE_CODEPOINTS)
 from hardware.uart_rx import make_uart_rx, uart_rx_t
 from hardware.uart_text_buffer import make_uart_text_writer
+from hardware.uart_utf8 import make_uart_utf8_decoder
 
 uint128_t = make_uint_t(128)
 
@@ -27,11 +28,12 @@ BYTE_CAPACITY = 8192
 _timing = make_vga_timing(VGA_1920_1080, v_start=1124)
 _receive = make_uart_rx(148.5)
 _edit = make_uart_text_writer(BYTE_CAPACITY)
+_decode = make_uart_utf8_decoder(UNICODE_CODEPOINTS)
 _bytes, _bytes_t = make_ram(uint8_t, BYTE_CAPACITY, ports=("w", "r"), read_latency=1)
 _font = make_font_row_rom(ROW_DICTIONARY)
 _row_indices, _row_indices_t = make_ram(uint9_t, 2048, ports=("r",),
                                       read_latency=1, init=ROW_INDICES)
-_meta, _meta_t = make_ram(uint43_t, 128, ports=("r",), read_latency=1, init=METADATA)
+_meta, _meta_t = make_ram(uint43_t, 256, ports=("r",), read_latency=1, init=METADATA)
 # Pad the compact class table to a 64-column stride: two six-bit IDs are the
 # address. Both histories read the same 4096 x 4-bit dual-port block ROM.
 _kerning_init = [KERNING[left * KERNING_RIGHT_COUNT + right]
@@ -90,7 +92,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     received = _receive(rx)
     sig = _timing()
     written: Reg[uint14_t] = 0
-    edit = _edit(received, written)
+    edit = _edit(_decode(received), written)
     wr_en: uint1_t = edit.committed
 
     snapshot_end: Reg[uint14_t] = 0
@@ -106,7 +108,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     following_index: Reg[uint14_t] = 0
     at_end: Reg[uint1_t] = 1
     next_at_end: Reg[uint1_t] = 1
-    lookup_code: Reg[uint7_t] = 0
+    lookup_code: Reg[uint8_t] = 0
     previous_class: Reg[uint6_t] = 0
     previous_width: Reg[uint5_t] = 0
     previous_origin: Reg[int13_t] = MARGIN_X
@@ -297,8 +299,8 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
                                index=read_index, after=read_index + 1, kind=1)
             mail_valid = 1
             load_state = 6
-        elif (chars.p1.rd_data >= 32) & (chars.p1.rd_data < 128):
-            lookup_code = chars.p1.rd_data[6:0]
+        elif (chars.p1.rd_data >= 32):
+            lookup_code = chars.p1.rd_data
             # Prefetch the following byte throughout the font lookup, so
             # even an immediately consumed mailbox can decode it correctly.
             byte_read_index = uint13_t(read_index + 1)
@@ -366,8 +368,8 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         # Start the following supported byte while this row waits in the
         # mailbox. The next publication stalls if that mailbox is still full.
         # This hides the added address stage: six clocks per glyph steady-state.
-        if (~next_at_end) & (chars.p1.rd_data >= 32) & (chars.p1.rd_data < 128):
-            lookup_code = chars.p1.rd_data[6:0]
+        if (~next_at_end) & (chars.p1.rd_data >= 32):
+            lookup_code = chars.p1.rd_data
             byte_read_index = uint13_t(following_index + 1)
             load_state = 3
 

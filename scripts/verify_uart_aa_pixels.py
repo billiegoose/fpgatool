@@ -3,22 +3,15 @@
 import argparse
 from pathlib import Path
 import sys
+from font_glyph_ids import edited_glyph_ids
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'examples'))
-from hardware.red2_aa_uart_data import AA_COLUMNS, DESCRIPTORS, ADVANCES
+from hardware.red2_aa_uart_data import AA_COLUMNS, DESCRIPTORS, ADVANCES, UNICODE_CODEPOINTS
 
 
 def expected_pixels(text, width=1920, height=1080, margin_x=5, margin_y=2):
-    # Apply the UART storage edits before independently laying out font columns.
-    buffered = bytearray()
-    for code in text:
-        if code in (8, 127):
-            if buffered:
-                buffered.pop()
-        elif len(buffered) < 8192:
-            buffered.append(code)
-    text = buffered
+    text = edited_glyph_ids(text, UNICODE_CODEPOINTS)
     pixels = bytearray(width * height)
     right, bottom = width - margin_x, height - margin_y
     y, history = margin_y, []
@@ -27,11 +20,11 @@ def expected_pixels(text, width=1920, height=1080, margin_x=5, margin_y=2):
             y += 36
             history = []
             continue
-        if code >= 128 or not DESCRIPTORS[code] & (1 << 18):
+        if not DESCRIPTORS[code] & (1 << 18):
             continue
         descriptor = DESCRIPTORS[code]
         base, glyph_width = descriptor & 1023, (descriptor >> 10) & 255
-        x = max((left_x + ADVANCES[(left << 7) | code]
+        x = max((left_x + ADVANCES[(left << 8) | code]
                  for left, left_x in history), default=margin_x)
         if x + glyph_width > right:
             y += 36
