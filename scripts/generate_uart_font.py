@@ -1,13 +1,33 @@
 #!/usr/bin/env python3
 """Export raw RED2 artwork and kerning as ordinary Pypeline ROM constants."""
 import argparse
-import ast
 from pathlib import Path
 import sys
-from kerning_history import verify_two_glyph_history
+import runpy
+import tempfile
 from font_glyph_ids import assign_glyph_ids
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def pack_kerning(data):
+    """Overlay padded four-bit kerning on unused high bits of row/padding words."""
+    depth = 1 << (data['KERNING_LEFT_BITS'] + data['KERNING_RIGHT_BITS'])
+    base = 2048 - depth
+    if base < data['FONT_INDEX_BASE']:
+        raise ValueError('Kerning overlaps bitmap dictionary; it cannot share the font BRAM')
+    words = list(data['FONT_WORDS'])
+    left_count, right_count = data['KERNING_LEFT_COUNT'], data['KERNING_RIGHT_COUNT']
+    for left in range(1 << data['KERNING_LEFT_BITS']):
+        for right in range(data['KERNING_STRIDE']):
+            address = base | (left << data['KERNING_RIGHT_BITS']) | right
+            if words[address] >= 512:
+                raise ValueError('Kerning storage overlaps occupied font bits')
+            kern = data['KERNING'][left * right_count + right] if left < left_count and right < right_count else 0
+            if not 0 <= kern <= 15:
+                raise ValueError('Kerning adjustment must fit four unsigned bits')
+            words[address] |= kern << 12
+    return base, words
 
 
 def main():
@@ -16,29 +36,41 @@ def main():
     parser.add_argument('--aseprite', default='aseprite')
     args = parser.parse_args()
     sys.path.insert(0, str(args.font_dir.resolve()))
-    from render_font import load_glyphs, AutoKerning
-    glyphs, unicode_codepoints = assign_glyph_ids(load_glyphs(args.font_dir / 'RED2 Font.aseprite', args.aseprite))
-    kerning = AutoKerning(glyphs, spacing=4)
+    from src.font import load_glyphs
+    from src.pipeline import prepare_font
+    from src.bram import export_bram
+    from src.specimen import EXAMPLE_TEXT
+    prepared = prepare_font(load_glyphs(args.font_dir / 'RED2 Font.aseprite', args.aseprite),
+                            spacing=4, kerning_slack=2, widen_pairs=False)
+    glyphs, unicode_codepoints = assign_glyph_ids(prepared.glyphs)
+    # The upstream pipeline owns class selection and its exhaustive history proof.
+    with tempfile.TemporaryDirectory() as temporary:
+        export_bram(prepared, temporary)
+        row_data = runpy.run_path(str(Path(temporary) / 'red2_bram.py'))
+    kerning_base, font_words = pack_kerning(row_data)
+    kerning = prepared.kerning
+    glyph_ids = {code: code for code in prepared.glyphs if code < 128}
+    glyph_ids.update({code: 128 + i for i, code in enumerate(unicode_codepoints)})
     columns, descriptors, advances = [], [0] * 256, [0] * (256 * 256)
     for code, glyph in sorted(glyphs.items()):
         if not 0 <= code < 256 or glyph.height > 32 or glyph.width > 255:
             raise ValueError('Expected glyph IDs 0..255, at most 255 x 32 pixels')
-        descriptors[code] = len(columns) | (glyph.width << 10) | (1 << 18)
+        descriptors[code] = len(columns) | (glyph.width << 11) | (1 << 19)
         alpha = glyph.getchannel('A')
         columns.extend(sum(bool(alpha.getpixel((x, y))) << y for y in range(glyph.height))
                        for x in range(glyph.width))
-    if len(columns) > 1024:
-        raise ValueError('Font exceeds the provisioned 1024 columns')
-    for left in glyphs:
-        for right in glyphs:
+    if len(columns) > 2048:
+        raise ValueError('Font exceeds the provisioned 2048 columns')
+    for left, left_id in glyph_ids.items():
+        for right, right_id in glyph_ids.items():
             advance = kerning.advance(left, right)
             if not -64 <= advance < 64:
                 raise ValueError('Pair advance exceeds seven signed bits')
-            advances[(left << 8) | right] = advance
-    checked = verify_two_glyph_history(advances, sorted(glyphs), stride=256)
+            advances[(left_id << 8) | right_id] = advance
+    checked = prepared.statistics["history_combinations_checked"]
     print(f'Two-glyph history verified across {checked:,} combinations at spacing 4')
     lines = ['"""Generated from raw RED2 Aseprite slices; no R2BF dependency.',
-             'Descriptor: valid bit 18, width bits 17:10, base column bits 9:0.',
+             'Descriptor: valid bit 19, width bits 18:11, base column bits 10:0.',
              'Advance index: (previous glyph ID << 8) | current glyph ID.',
              'Bitmap bit 0 is the top pixel. Regenerate with scripts/generate_uart_font.py.',
              '"""', '']
@@ -50,122 +82,34 @@ def main():
         lines.append(')\n')
     output = ROOT / 'examples/hardware/red2_uart_data.py'
     output.write_text('\n'.join(lines))
-    # Crop vertical blank margins and dictionary-code row-major scanout data.
-    # Compute how far any future glyph can reach back from this glyph's origin.
-    # Retain explicit guards even though this font now has nonnegative advances.
-    future = {code: 0 for code in glyphs}
-    for iteration in range(len(glyphs)):
-        bounds = {left: min(0, min(advances[(left << 8) | right] + future[right]
-                                   for right in glyphs)) for left in glyphs}
-        if bounds == future:
-            break
-        future = bounds
-    else:
-        raise ValueError('Kerning has a negative cycle; finite streaming lookahead is impossible')
-    row_indices, dictionary = [], [0]
-    row_ids = {0: 0}
-    metadata, kerns = [0] * 256, [0] * (256 * 256)
-    for code, glyph in sorted(glyphs.items()):
-        if glyph.width > 21 or -future[code] > 7:
-            raise ValueError('Row renderer expects glyphs <=21 pixels and backtracking <=7')
-        alpha = glyph.getchannel('A')
-        bounds = alpha.getbbox()
-        top_y, height = (bounds[1], bounds[3] - bounds[1]) if bounds else (0, 0)
-        base = len(row_indices)
-        if base >= 2048:
-            raise ValueError('Glyph base exceeds eleven-bit addresses')
-        metadata[code] = ((base << 20) | (top_y << 15) | (height << 9)
-                          | (1 << 8) | (-future[code] << 5) | glyph.width)
-        for y in range(top_y, top_y + height):
-            bits = sum(bool(alpha.getpixel((x, y))) << x for x in range(glyph.width))
-            if bits not in row_ids:
-                row_ids[bits] = len(dictionary)
-                dictionary.append(bits)
-            row_indices.append(row_ids[bits])
-        for right in glyphs:
-            kern = glyph.width + 4 - advances[(code << 8) | right]
-            if not 0 <= kern <= 15:
-                raise ValueError('Kerning adjustment must fit four unsigned bits')
-            kerns[(code << 8) | right] = kern
-    # Group full kerning rows and columns independently, over supported glyphs.
-    codes = sorted(glyphs)
-    left_groups, right_groups = {}, {}
-    left_ids, right_ids = {}, {}
-    for code in codes:
-        row_key = tuple(kerns[(code << 8) | right] for right in codes)
-        col_key = tuple(kerns[(left << 8) | code] for left in codes)
-        left_ids[code] = left_groups.setdefault(row_key, len(left_groups))
-        right_ids[code] = right_groups.setdefault(col_key, len(right_groups))
-    left_count, right_count = len(left_groups), len(right_groups)
-    if left_count > 64 or right_count > 64:
-        raise ValueError('Kerning classes exceed six-bit IDs')
-    class_kerns = [None] * (left_count * right_count)
-    for left in codes:
-        for right in codes:
-            address = left_ids[left] * right_count + right_ids[right]
-            value = kerns[(left << 8) | right]
-            if class_kerns[address] is not None and class_kerns[address] != value:
-                raise ValueError('Kerning classes do not preserve pair adjustments')
-            class_kerns[address] = value
-        metadata[left] |= (left_ids[left] << 31) | (right_ids[left] << 37)
-    if any(value is None for value in class_kerns):
-        raise ValueError('Kerning class table contains an unmapped pair')
-    print(f'Kerning classes: {left_count} left x {right_count} right, '
-          f'{len(class_kerns)} four-bit entries')
-    if len(dictionary) > 512:
-        raise ValueError('Row dictionary exceeds nine-bit indices')
-    if len(row_indices) > 2048:
-        raise ValueError('Cropped rows exceed eleven-bit addresses')
-    # A 2048x16-bit dual-port ROM stores packed dictionary bytes followed by
-    # one nine-bit cropped row index per word, keeping the read pipeline intact.
-    font_bytes = [byte for bits in dictionary for byte in
-                  (bits & 255, (bits >> 8) & 255, (bits >> 16) & 255)]
-    if len(font_bytes) & 1:
-        font_bytes.append(0)
-    index_base = len(font_bytes) // 2
-    font_words = [font_bytes[i] | (font_bytes[i + 1] << 8)
-                  for i in range(0, len(font_bytes), 2)]
-    font_words.extend(row_indices)
-    if len(font_words) > 2048:
-        raise ValueError('Dictionary and cropped indices exceed 2048 sixteen-bit words')
-    for code in codes:
-        base = (metadata[code] >> 20) & 2047
-        if base + index_base >= 2048:
-            raise ValueError('Packed glyph base exceeds eleven-bit addresses')
-        metadata[code] += index_base << 20
-    print(f'Packed font: {len(dictionary)} patterns, {len(row_indices)} cropped rows, '
-          f'{len(font_words)} words in a 2048 x 16-bit ROM')
-    font_words.extend([0] * (2048 - len(font_words)))
-    row_lines = ['"""Raw RED2 row-major font ROMs for the streaming pixel engine.',
-                 'Row address = base + glyph_y - top_y, only within cropped height.',
-                 'FONT_WORDS begins with packed dictionary bytes, followed by one nine-bit row ID per word.',
-                 'Metadata base is a word address in this combined ROM; bit 0 is the left pixel.',
+    left_count, right_count = row_data['KERNING_LEFT_COUNT'], row_data['KERNING_RIGHT_COUNT']
+    print(f'Kerning classes: {left_count} left x {right_count} right; '
+          f'packed in font word bits 15:12 starting at {kerning_base}')
+    print(f'Packed font: {row_data["FONT_DICTIONARY_COUNT"]} patterns, '
+          f'{row_data["FONT_ROW_COUNT"]} cropped rows, 2048 x 16-bit ROM')
+    row_lines = ['"""RED2 row-major font and kerning in one dual-port 2048 x 16-bit ROM.',
+                 'Dictionary: three little-endian bytes per pattern, bit 0 is the left pixel.',
+                 'Row address = metadata base + glyph_y - top_y; row ID is bits 8:0.',
+                 'Kerning: bits 15:12 at FONT_KERNING_BASE | (left_class << KERNING_RIGHT_BITS) | right_class.',
                  'Metadata: right class[42:37], left class[36:31], base[30:20],',
-                 'top_y[19:15], height[14:9],',
-                 'valid[8], future backtrack[7:5], width[4:0].',
-                 'KERNING[left_class * KERNING_RIGHT_COUNT + right_class] is a four-bit adjustment.',
-                 'Pair step = previous width + 4 - adjustment.',
-                 'Regenerate with scripts/generate_uart_font.py.', '"""', '',
-                 f'KERNING_LEFT_COUNT = {left_count}', f'KERNING_RIGHT_COUNT = {right_count}',
-                 f'FONT_DICTIONARY_COUNT = {len(dictionary)}',
-                 f'FONT_INDEX_BASE = {index_base}', f'FONT_ROW_COUNT = {len(row_indices)}',
-                 f'UNICODE_CODEPOINTS = {unicode_codepoints!r}', '']
-    for name, values in [('FONT_WORDS', font_words), ('METADATA', metadata), ('KERNING', class_kerns)]:
+                 'top_y[19:15], height[14:9], valid[8], guard[7:5], width[4:0].',
+                 'Pair step = previous width + SPACING - adjustment.',
+                 'KERNING is the dense reference table; hardware reads FONT_WORDS.',
+                 'Regenerate with scripts/generate_uart_font.py.', '"""', '']
+    for name in ('SPACING', 'KERNING_SLACK', 'WIDEN_PAIRS',
+                 'KERNING_LEFT_COUNT', 'KERNING_RIGHT_COUNT',
+                 'KERNING_LEFT_BITS', 'KERNING_RIGHT_BITS', 'KERNING_STRIDE',
+                 'FONT_DICTIONARY_COUNT', 'FONT_INDEX_BASE', 'FONT_ROW_COUNT', 'UNICODE_CODEPOINTS'):
+        row_lines.append(f'{name} = {row_data[name]!r}')
+    row_lines += [f'FONT_KERNING_BASE = {kerning_base}', '']
+    for name, values in [('FONT_WORDS', font_words), ('METADATA', row_data['METADATA']),
+                         ('KERNING', row_data['KERNING'])]:
         row_lines.append(name + ' = (')
         for start in range(0, len(values), 16):
             row_lines.append('    ' + ', '.join(map(str, values[start:start+16])) + ',')
         row_lines.append(')\n')
     (ROOT / 'examples/hardware/red2_row_data.py').write_text('\n'.join(row_lines))
-    # Copy the exact README sample, without importing its tests at runtime.
-    tree = ast.parse((args.font_dir / 'test_render_font.py').read_text())
-    for statement in tree.body:
-        if isinstance(statement, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'EXAMPLE_TEXT'
-                                                     for t in statement.targets):
-            text = ast.literal_eval(statement.value)
-            (ROOT / 'assets/red2-readme-example.txt').write_text(text)
-            break
-    else:
-        raise ValueError('Could not find the README example text')
+    (ROOT / 'assets/red2-readme-example.txt').write_text(EXAMPLE_TEXT)
     print(f'Generated {len(glyphs)} glyphs, {len(columns)} columns and glyph-ID pair advances: {output}')
 
 

@@ -20,10 +20,10 @@ def expected_pixels(text, width=1920, height=1080, margin_x=5, margin_y=2):
             y += 36
             history = []
             continue
-        if not DESCRIPTORS[code] & (1 << 18):
+        if not DESCRIPTORS[code] & (1 << 19):
             continue
         descriptor = DESCRIPTORS[code]
-        base, glyph_width = descriptor & 1023, (descriptor >> 10) & 255
+        base, glyph_width = descriptor & 2047, (descriptor >> 11) & 255
         x = max((left_x + ADVANCES[(left << 8) | code]
                  for left, left_x in history), default=margin_x)
         if x + glyph_width > right:

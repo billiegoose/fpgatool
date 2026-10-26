@@ -38,6 +38,9 @@ class UartUtf8DecoderTests(unittest.TestCase):
         p.sim_reset()
         self.decoder = make_uart_utf8_decoder(UNICODE_CODEPOINTS)
 
+    def glyph(self, character):
+        return 128 + UNICODE_CODEPOINTS.index(ord(character))
+
     def send(self, incoming):
         output = []
         for byte in incoming:
@@ -51,22 +54,26 @@ class UartUtf8DecoderTests(unittest.TestCase):
         return output
 
     def test_all_triangles_ascii_and_newline(self):
-        self.assertEqual(self.send('A▲▶▼◀Z\n'.encode()), [65, 128, 129, 130, 131, 90, 10])
+        self.assertEqual(self.send('A▲▶▼◀Z\n'.encode()), [65, *(self.glyph(c) for c in '▲▶▼◀'), 90, 10])
+
+    def test_all_box_drawing_characters(self):
+        text = '─│┌┐└┘├┤┬┴┼'
+        self.assertEqual(self.send(text.encode()), [self.glyph(c) for c in text])
 
     def test_unsupported_unicode_and_recovery(self):
         self.assertEqual(self.send('A►B☃C'.encode()), [65, 66, 67])
 
     def test_interrupted_and_malformed_sequences(self):
-        self.assertEqual(self.send(b'\xe2\x96A\xe2\x96\xb6'), [65, 129])
+        self.assertEqual(self.send(b'\xe2\x96A\xe2\x96\xb6'), [65, self.glyph('▶')])
         self.assertEqual(self.send(b'\xf0\x82\x96\xb6Z'), [90])  # Overlong 4-byte ▶ rejected.
 
     def test_backspace_after_unicode(self):
-        self.assertEqual(self.send('▲\bZ'.encode()), [128, 8, 90])
+        self.assertEqual(self.send('▲\bZ'.encode()), [self.glyph('▲'), 8, 90])
 
     def test_invalid_strobe_does_not_consume_input(self):
         event = p.sim_call(self.decoder, uart_rx_t(data=ord('A'), valid=0))
         self.assertEqual(int(event.valid), 0)
-        self.assertEqual(self.send('▶'.encode()), [129])
+        self.assertEqual(self.send('▶'.encode()), [self.glyph('▶')])
 
 
 if __name__ == '__main__':

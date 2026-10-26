@@ -154,7 +154,8 @@ that pipeline. The final pin-constrained route must still meet 148.5 MHz.
 
 The receiver decodes UART UTF-8 into compact single-byte glyph IDs before
 storing them in an editable 8 KiB buffer. ASCII keeps its byte values, while
-`▲` (U+25B2), `▶` (U+25B6), `▼` (U+25BC), and `◀` (U+25C0) map to IDs 128–131.
+the eleven box-drawing characters map to IDs 128–138 and `▲▶▼◀` map to
+IDs 139–142, in sorted Unicode order.
 Unsupported Unicode is skipped, and backspace removes a whole decoded glyph.
 The buffer includes LF. It snapshots the committed byte count once per frame and replays
 the same byte span for every glyph scanline. LF advances to the next text line;
@@ -167,35 +168,36 @@ buffer does nothing and can free space in a full buffer. The demo does not
 scroll. Edits are reflected by the next frame; removed BRAM bytes are zeroed
 so an in-progress frame cannot reread deleted characters.
 
-Font storage is row-major and dictionary-compressed. The font has 257 unique
-21-bit patterns, including blank at dictionary entry 0. Each pattern occupies
-three little-endian bytes; the dictionary is padded to 386 sixteen-bit words
-and followed by 1,293 nine-bit cropped row IDs (one per sixteen-bit word).
-Both tables share one 2048×16-bit dual-port block ROM, occupying 1,679 words.
-Metadata base addresses point into the row-index word region. A pattern occupies two
-adjacent sixteen-bit words; both ports read them together, then a byte-alignment
-shift extracts the 21 pixels. The 256×43-bit glyph metadata stores width, top_y,
-cropped height, base word address, validity, backtracking guard, and separate
-six-bit left/right kerning class IDs. Scanlines outside the cropped height
-supply blank ink without changing placement; spaces have zero stored rows.
-Kerning uses 59 left classes (identical adjustment rows) and 55 right classes
-(identical adjustment columns). The generated table has 59×55 four-bit entries;
-the hardware pads to a 64-column stride in a 4096×4-bit dual-port ROM, allowing
-addressing as `(left_class << 6) | right_class`. Class mappings share the
-metadata read, so they require no separate block RAM. Font generation verifies
-every supported glyph pair retains exactly the original adjustment. A 64-bit
-compositor ORs each incoming row into unfinished ink and emits only pixels that
-no future glyph can affect. The generated metadata retains a backtracking guard;
-all guards are zero with the current nonnegative pair advances.
+Font storage is row-major and dictionary-compressed. The latest RED2 artwork
+includes all four triangles and eleven fixed-cell box-drawing characters. Its
+264 unique 21-bit patterns occupy 396 sixteen-bit words as three little-endian
+bytes per pattern, followed by 1,542 nine-bit cropped row IDs. Both tables share
+one 2048×16-bit dual-port block ROM, occupying words 0–1937. Metadata base
+addresses point into the row-index region. Both ports fetch the two words
+covering a pattern; a byte-alignment shift extracts its 21 pixels. The
+256×43-bit glyph metadata stores width, top_y, cropped height, base word
+address, validity, backtracking guard, and separate six-bit kerning class IDs.
+Scanlines outside the cropped height supply blank ink without changing
+placement; spaces have zero stored rows.
+
+Kerning uses the upstream font's default spacing 4 and slack 2: 29 left × 29
+right classes, padded to 32×32. Slack may widen a pair by up to two pixels;
+fixed-cell pairs remain exact. The 1,024 four-bit adjustments occupy bits
+15:12 of font words 1024–2047, alongside row IDs in bits 8:0 and trailing
+padding. Kerning addresses are `1024 | (left_class << 5) | right_class`;
+there is no separate kerning BRAM. Class mappings share the metadata read.
+A 64-bit compositor ORs each incoming row into unfinished ink and emits only
+pixels that no future glyph can affect. The generated metadata retains a
+backtracking guard; all guards are zero with the current nonnegative advances.
 
 The loader remembers the two previous supported glyphs' left classes, widths,
 and absolute origins. It places each new glyph at the maximum origin required by
 both pair advances, preserving spacing through tucked punctuation such as `P.O.`
-and `F.T`. Two read ports use the same kerning ROM. The font loader registers
-the cropped word address, reads its row ID, registers the two dictionary-word
-addresses, then reads and aligns the pattern. Kerning and origin arithmetic run
-in parallel. The next supported character lookup starts when the current row is
-published; publication waits for mailbox space. This preserves six clocks per
+and `F.T`. The two font ROM ports first read the previous and older kerning
+adjustments. The loader then reads the cropped row ID, registers the two
+dictionary-word addresses, and reads and aligns the pattern. Origin arithmetic
+runs in parallel with row and dictionary fetches. The next supported character
+lookup starts when the current row is published; publication waits for mailbox space. This preserves six clocks per
 glyph despite the added dictionary-address stage. UART bytes are prefetched
 throughout lookup, with newline/end/unsupported-byte boundaries handled
 separately. History starts empty for each scanline replay at the current text
@@ -222,9 +224,9 @@ does not simulate MMCMs. `--uart-file` drives actual 8-N-1 serial bits into
 `RsRx`; `--uart-baud` defaults to 115200. Three frames allow the complete
 README sample to arrive and a stable frame to be captured.
 
-The checked-in font data comes directly from raw Aseprite slices, independent
-of R2BF. Regenerate the row ROMs, column data for verification, and README
-sample from the adjacent `red2-font` checkout (requires Aseprite and its Pillow
+The checked-in font data uses the adjacent font project’s shared preparation
+and BRAM exporter, then packs kerning into the font ROM’s unused row-ID bits.
+Regenerate the row ROMs, column data for verification, and README sample from the adjacent `red2-font` checkout (requires Aseprite and its Pillow
 environment):
 
 ```sh
@@ -239,10 +241,13 @@ font data, rather than the streaming compositor:
   build/vga_uart_readme_1080.png assets/red2-readme-example.txt
 ```
 
-The Unicode-capable binary design completes final pin-constrained routing
-at **149.99 MHz**, above the 148.5 MHz pixel-clock target. It uses three
-RAMB36E1 and one RAMB18E1 blocks (15.75 KiB). An actual 1080p HDL capture
-containing `▲▶▼◀` matches the independent column-major renderer pixel-for-pixel.
+The binary design uses three RAMB36E1 blocks (13.5 KiB), including text
+storage. The kerning table shares the font BRAM, saving the separate RAMB18E1
+used by the previous design. A register between UTF-8 decoding and the edit
+buffer keeps Unicode matching out of the buffer-tail update’s timing path.
+The final pin-constrained route reaches **158.68 MHz**, above the 148.5 MHz
+pixel-clock target. A six-frame 1080p HDL capture covering box drawing,
+triangles, backspace, and wrapping matches the independent renderer exactly.
 
 The board demo also exposes UART diagnostics from the same receiver used by
 the renderer. The seven-segment display reads `CCBB`: received-byte count modulo

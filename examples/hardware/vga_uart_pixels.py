@@ -10,8 +10,8 @@ from fifo import make_fifo
 from vga.timing import VGA_1920_1080, make_vga_timing
 from vga.types import vga_12bpp_t
 from hardware.font_row_rom import make_font_row_rom
-from hardware.red2_row_data import (FONT_WORDS, METADATA, KERNING,
-                                    KERNING_LEFT_COUNT, KERNING_RIGHT_COUNT, UNICODE_CODEPOINTS)
+from hardware.red2_row_data import (FONT_WORDS, METADATA, FONT_KERNING_BASE,
+                                    KERNING_RIGHT_BITS, SPACING, UNICODE_CODEPOINTS)
 from hardware.uart_rx import make_uart_rx, uart_rx_t
 from hardware.uart_text_buffer import make_uart_text_writer
 from hardware.uart_utf8 import make_uart_utf8_decoder
@@ -30,12 +30,7 @@ _decode = make_uart_utf8_decoder(UNICODE_CODEPOINTS)
 _bytes, _bytes_t = make_ram(uint8_t, BYTE_CAPACITY, ports=("w", "r"), read_latency=1)
 _font = make_font_row_rom(FONT_WORDS)
 _meta, _meta_t = make_ram(uint43_t, 256, ports=("r",), read_latency=1, init=METADATA)
-# Pad the compact class table to a 64-column stride: two six-bit IDs are the
-# address. Both histories read the same 4096 x 4-bit dual-port block ROM.
-_kerning_init = [KERNING[left * KERNING_RIGHT_COUNT + right]
-                 if left < KERNING_LEFT_COUNT and right < KERNING_RIGHT_COUNT else 0
-                 for left in range(64) for right in range(64)]
-_kern, _kern_t = make_ram(uint4_t, 4096, ports=("r", "r"), read_latency=1, init=_kerning_init)
+# Kerning occupies unused bits 15:12 of row-ID/padding words in _font.
 # Eight packed pixels per word; eight memory words plus the FWFT output word.
 # Including the consumer shift register, storage is at most 80 upcoming pixels.
 _pixels, _pixels_t = make_fifo(uint32_t, 8)
@@ -74,7 +69,10 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     received = _receive(rx)
     sig = _timing()
     written: Reg[uint14_t] = 0
-    edit = _edit(_decode(received), written)
+    # Keep UTF-8 matching out of the edit-buffer tail update's timing path.
+    decoded: Reg[uart_rx_t]
+    edit = _edit(decoded, written)
+    decoded = _decode(received)
     wr_en: uint1_t = edit.committed
 
     snapshot_end: Reg[uint14_t] = 0
@@ -115,16 +113,16 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     chars = _bytes(_bytes.p0_in_t(addr=edit.address[12:0], wr_data=edit.data,
                                 wr_en=wr_en, valid=1),
                    _bytes.p1_in_t(addr=byte_read_index, valid=1))
+    meta = _meta(_meta.p0_in_t(addr=lookup_code, valid=1))
     font_a: uint11_t = uint11_t(dictionary_a)
-    if load_state == 5:
+    font_b: uint11_t = uint11_t(dictionary_b)
+    if load_state == 4:
+        font_a = FONT_KERNING_BASE | (uint11_t(previous_class) << KERNING_RIGHT_BITS) | uint11_t(meta.p0.rd_data[42:37])
+        font_b = FONT_KERNING_BASE | (uint11_t(older_class) << KERNING_RIGHT_BITS) | uint11_t(meta.p0.rd_data[42:37])
+    elif load_state == 5:
         font_a = row_addr
     font = _font(_font.p0_in_t(addr=font_a, valid=1),
-                 _font.p1_in_t(addr=dictionary_b, valid=1))
-    meta = _meta(_meta.p0_in_t(addr=lookup_code, valid=1))
-    pair_addr: uint12_t = (uint12_t(previous_class) << 6) | uint12_t(meta.p0.rd_data[42:37])
-    older_pair_addr: uint12_t = (uint12_t(older_class) << 6) | uint12_t(meta.p0.rd_data[42:37])
-    kern = _kern(_kern.p0_in_t(addr=pair_addr, valid=1),
-                 _kern.p1_in_t(addr=older_pair_addr, valid=1))
+                 _font.p1_in_t(addr=font_b, valid=1))
 
     state: Reg[uint3_t] = 7  # begin, take, offsets, shifts, emit, merge, unused, idle
     window: Reg[uint64_t] = 0
@@ -310,9 +308,9 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         load_state = 5
     elif load_state == 5:
         # Class mappings arrive with metadata; the dependent kerning read
-        # settles one clock later. Both histories share the same class ROM.
-        step_previous = int7_t(previous_width) + 4 - int7_t(kern.p0.rd_data)
-        step_older = int7_t(older_width) + 4 - int7_t(kern.p1.rd_data)
+        # settles one clock later. Both histories share the font ROM ports.
+        step_previous = int7_t(previous_width) + SPACING - int7_t(font.p0.rd_data[15:12])
+        step_older = int7_t(older_width) + SPACING - int7_t(font.p1.rd_data[15:12])
         load_state = 7
     elif load_state == 7:
         # Register the additions separately from the maximum and mailbox mux.

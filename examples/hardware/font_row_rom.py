@@ -1,5 +1,5 @@
 # pyright: reportInvalidTypeForm=none
-"""Combined dictionary and 9-bit row IDs: dual-port 2048 x 16-bit ROM."""
+"""Dictionary, 9-bit row IDs and packed kerning: dual-port 2048 x 16-bit ROM."""
 from pypeline import *
 from ram import make_ram, RamConfig, ram_vhdl_text, ram_model_class
 
