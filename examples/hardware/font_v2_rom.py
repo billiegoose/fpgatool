@@ -1,12 +1,12 @@
 # pyright: reportInvalidTypeForm=none
-"""One dual-port 1024x32 font store with synchronous, one-clock reads."""
+"""One 1024x32 font BRAM: boot writes on A, synchronous one-clock reads on A/B."""
 from pypeline import *
 from ram import make_ram, RamConfig, ram_vhdl_text, ram_model_class
 
 
-def make_font_v2_rom(words):
-    reference, out_t = make_ram(uint32_t, 1024, ports=('r', 'r'), read_latency=1, init=words)
-    cfg = RamConfig('red2_font_v2_rom', uint32_t, 1024, ('r', 'r'), 1, 0, 0, words, False)
+def make_font_v2_rom(words=None):
+    reference, out_t = make_ram(uint32_t, 1024, ports=('rw', 'r'), read_latency=1, init=words)
+    cfg = RamConfig('red2_font_v2_rom', uint32_t, 1024, ('rw', 'r'), 1, 0, 0, words, False)
     body = ram_vhdl_text(cfg, handshake=False)
     body = body.replace('\nbegin\n', '\nattribute ram_style : string;\n'
                         'attribute ram_style of ram_mem : signal is "block";\nbegin\n', 1)

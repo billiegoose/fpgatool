@@ -102,6 +102,7 @@ def flash_byte_io(
     op: uint2_t,
     address: uint32_t,
     write_data: uint8_t,
+    reset: uint1_t = 0,
 ) -> qspi_flash_byte_io_t:
     """Generic quad-output/quad-program access to arbitrary flash byte addresses.
 
@@ -113,6 +114,10 @@ def flash_byte_io(
     """
 
     state: Reg[uint6_t] = _BYTE_ST_POWERUP
+    # Ready describes acceptance at the current edge. Reading the forwarded
+    # next state below chains the serial engine's transition logic into every
+    # caller's launch/clock-enable path.
+    cycle_state: uint6_t = state
     return_state: Reg[uint6_t] = _BYTE_ST_READY
     timer: Reg[uint32_t] = 0
 
@@ -610,9 +615,22 @@ def flash_byte_io(
         dq2_t = 1
         dq3_t = 1
 
+    if reset:
+        # Reinitialize only after the external flash owner has released CS#.
+        # This also rechecks QE if a programmer changed the status registers.
+        state = _BYTE_ST_POWERUP
+        timer = 0
+        cclk = 0
+        cs_n = 1
+        quad_enabled = 0
+        done = 0
+        error = 0
+
     ready: uint1_t = 0
-    if state == _BYTE_ST_READY:
+    if cycle_state == _BYTE_ST_READY:
         ready = 1
+    if reset:
+        ready = 0
     busy: uint1_t = not ready
 
     return qspi_flash_byte_io_t(

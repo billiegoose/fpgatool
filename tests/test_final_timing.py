@@ -31,6 +31,11 @@ class FinalTimingTests(unittest.TestCase):
             with self.assertRaisesRegex(fpgatool.FPGAToolError, 'missing'):
                 fpgatool.validate_final_timing(Path(directory) / 'missing.log')
 
+    def test_aligned_multi_clock_report_does_not_hide_pixel_clock_failure(self):
+        with self.assertRaisesRegex(fpgatool.FPGAToolError, 'clk_148p5: 142.17 MHz'):
+            self.check("Info: Max frequency for clock 'long_jtag_clock_name': 478.01 MHz (PASS at 12.00 MHz)\n"
+                       "Warning: Max frequency for clock                   'clk_148p5': 142.17 MHz (FAIL at 148.50 MHz)\n")
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -593,7 +593,8 @@ class FPGAToolTests(unittest.TestCase):
 
     def test_program_data_accepts_binary_outside_checkout(self):
         external = Path("/tmp/fpgatool-external-asset.bin")
-        args = mock.Mock(source=str(external), board="basys3", offset=None)
+        args = mock.Mock(source=str(external), board="basys3", offset=None, live=False,
+                         reload=False, ftdi_serial=None)
         with mock.patch.object(fpgatool, "validate_data_flash_write", return_value=(0x220000, 4, 0x10000)) as validate_mock, mock.patch.object(
             fpgatool, "openfpgaloader_data_command", return_value=["loader"]
         ), mock.patch.object(fpgatool, "run"):

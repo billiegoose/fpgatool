@@ -9,9 +9,8 @@ from ram import make_ram
 from fifo import make_fifo
 from vga.timing import VGA_1920_1080, make_vga_timing
 from vga.types import vga_12bpp_t
-from hardware.font_v2_rom import make_font_v2_rom
-from hardware.red2_font_v2_data import (FONT_WORDS, METADATA_BASE, CROP_BASE, ROWS_BASE,
-                                      PATTERNS_BASE, KERNING_BASE, PAGES, SPACING)
+from hardware.font_v2_loader import font_v2_config_t
+from hardware.font_v2_map import lookup_unicode_page
 from hardware.uart_rx import make_uart_rx, uart_rx_t
 from hardware.uart_codepoints import uart_codepoints, codepoint_event_t
 from hardware.font_v2_row_address import capture_row_address, row_address_input_t
@@ -26,19 +25,12 @@ BYTE_CAPACITY = 2048  # 24-bit Unicode scalars; three RAMB18 text blocks.
 _timing = make_vga_timing(VGA_1920_1080, v_start=1124)
 _receive = make_uart_rx(148.5)
 _bytes, _bytes_t = make_ram(uint24_t, BYTE_CAPACITY, ports=("w", "r"), read_latency=1)
-_font = make_font_v2_rom(FONT_WORDS)
 font_request_a: Wire[uint10_t]
 font_request_b: Wire[uint10_t]
 font_response_a: Wire[uint32_t]
 font_response_b: Wire[uint32_t]
-
-
-@MAIN(148.5)
-def font_v2_memory_clock():
-    result = _font(_font.p0_in_t(addr=font_request_a, valid=1),
-                   _font.p1_in_t(addr=font_request_b, valid=1))
-    font_response_a = result.p0.rd_data
-    font_response_b = result.p1.rd_data
+font_blank_start: Wire[uint1_t]
+font_blank_deadline: Wire[uint1_t]
 
 
 # Eight packed pixels per word; eight memory words plus the FWFT output word.
@@ -75,9 +67,12 @@ class uart_text_status_t(NamedTuple):
 
 
 @hw_func
-def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
+def uart_text_scanout(rx: uint1_t, config: font_v2_config_t, font_ready: uint1_t) -> uart_text_status_t:
     received = _receive(rx)
     sig = _timing()
+    # The final blank line is reserved for the normal next-frame preparation.
+    font_blank_start = (sig.pos.x == 0) & (sig.pos.y == HEIGHT)
+    font_blank_deadline = (sig.pos.x == 0) & (sig.pos.y == 1124)
     written: Reg[uint12_t] = 0
     decoded: Reg[codepoint_event_t]
     # Consume the previous event before assigning the register below. Pypeline
@@ -121,11 +116,11 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     candidate_previous: Reg[int13_t] = MARGIN_X
     candidate_older: Reg[int13_t] = MARGIN_X
     codepoint: Reg[uint24_t] = 0
-    prefetch_ready: Reg[uint1_t] = 0
+    prefetch_ready: Reg[uint2_t] = 0
     load_state: Reg[uint3_t] = 0  # idle, warmup, launch, and five overlapped read phases
     font_addr_a: Reg[uint10_t] = 0
     font_addr_b: Reg[uint10_t] = 0
-    prefetched_gid: Reg[uint8_t] = 0
+    prefetched_local: Reg[uint8_t] = 0
     prefetched_kind: Reg[uint2_t] = 3
     prefetched_valid: Reg[uint1_t] = 0
     current_meta: Reg[uint32_t] = 0
@@ -135,7 +130,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     current_after: Reg[uint12_t] = 0
     source_done: Reg[uint1_t] = 0
     page_present: Reg[uint1_t] = 0
-    page_glyph_base: Reg[uint8_t] = 0
+    page_metadata_base: Reg[uint10_t] = 0
     page_glyph_count: Reg[uint9_t] = 0
     map_select: Reg[uint2_t] = 0
     map_overlay: Reg[uint1_t] = 0
@@ -144,6 +139,8 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     row_select: Reg[uint2_t] = 0
     kern1_select: Reg[uint3_t] = 0
     kern2_select: Reg[uint3_t] = 0
+    previous_kern_address: Reg[uint10_t] = 0
+    older_kern_address: Reg[uint10_t] = 0
     row_ink: Reg[uint1_t] = 0
     pattern_id: Reg[uint9_t] = 0
     pattern_bits: Reg[uint21_t] = 0
@@ -163,9 +160,10 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
                    _bytes.p1_in_t(addr=byte_read_index[10:0], valid=1))
     font_a: uint32_t = font_response_a
     font_b: uint32_t = font_response_b
+    mapped_page = lookup_unicode_page(codepoint, config)
     row_lookup = capture_row_address(row_address_input_t(
         crop_word=uint32_t(crop), crop_select=0, y=row_glyph_y,
-        glyph_base=current_meta[10:0], rows_base=uint10_t(ROWS_BASE)), load_phase == 5)
+        glyph_base=current_meta[10:0], rows_base=uint10_t(config.rows_base)), load_phase == 5)
 
     state: Reg[uint3_t] = 7  # begin, take, offsets, shifts, emit, merge, unused, idle
     window: Reg[uint64_t] = 0
@@ -205,6 +203,41 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     restart_index: uint12_t = line_start
     take_mail: uint1_t = (state == 1) & mail_valid
     mail_available: uint1_t = (~mail_valid) | take_mail
+
+    # Requests depend on the registered read phase, not the compositor's
+    # reset/stop priority chain. Speculative requests during a pipeline flush
+    # are discarded; stalled phase 5 must keep A's map and B's older kerning.
+    # Masked parallel selection avoids a deep mux into the BRAM address pins.
+    request_crop: uint1_t = load_phase == 3
+    request_meta: uint1_t = load_phase == 7
+    request_map: uint1_t = (load_phase == 2) | (load_phase == 4)
+    request_older: uint1_t = load_phase == 4
+    request_previous: uint1_t = (load_phase == 5) & ((~pending_valid) | mail_available)
+    metadata_candidate: uint10_t = page_metadata_base + uint10_t(prefetched_local)
+    metadata_address: uint10_t = config.metadata_base
+    if page_present & (uint9_t(prefetched_local) < page_glyph_count):
+        metadata_address = metadata_candidate
+    pattern_address: uint10_t = uint10_t(config.patterns_base) + uint10_t(pattern_id)
+    next_a: uint10_t = 0
+    next_b: uint10_t = 0
+    if request_crop:
+        next_a = next_a | crop_address
+        next_b = next_b | pattern_address
+    if request_meta:
+        next_a = next_a | metadata_address
+        next_b = next_b | row_lookup.address
+    if request_map:
+        next_a = next_a | mapped_page.map_address
+    if request_older:
+        next_b = next_b | older_kern_address
+    if request_previous:
+        next_b = next_b | previous_kern_address
+    if not (request_crop | request_meta | request_map):
+        next_a = next_a | font_addr_a
+    if not (request_crop | request_meta | request_older | request_previous):
+        next_b = next_b | font_addr_b
+    font_addr_a = next_a
+    font_addr_b = next_b
 
     if state == 0:
         window = 0
@@ -276,23 +309,33 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     if sig.pos.x == WIDTH:
         state = 7
         stop_loader = 1
-    prepare: uint1_t = (sig.pos.x == (WIDTH + 32)) & ((sig.pos.y < (HEIGHT - 1)) | (sig.pos.y == 1124))
-    if prepare:
-        if sig.pos.y == 1124:
+    # Decode one clock ahead in horizontal blanking. These registered beam
+    # predicates preserve the existing x=WIDTH+32 handoff while keeping the
+    # full horizontal/vertical comparisons out of row-state register enables.
+    prepare: Reg[uint1_t] = 0
+    prepare_frame: Reg[uint1_t] = 0
+    prepare_margin: Reg[uint1_t] = 0
+    prepare_advance: Reg[uint1_t] = 0
+    if prepare & font_ready:
+        if prepare_frame:
             snapshot_end = written
             row_blank = 1
             glyph_y = 0
             line_start = 0
         else:
             # Preparing y+1: top and bottom margins are whole background rows.
-            row_blank = (sig.pos.y < (MARGIN_Y - 1)) | (sig.pos.y >= (TEXT_BOTTOM - 1))
-            if sig.pos.y >= MARGIN_Y:
+            row_blank = prepare_margin
+            if prepare_advance:
                 if glyph_y == 35:
                     glyph_y = 0
                     line_start = line_end
                 else:
                     glyph_y = glyph_y + 1
         state = 0
+    prepare = (sig.pos.x == (WIDTH + 31)) & ((sig.pos.y < (HEIGHT - 1)) | (sig.pos.y == 1124))
+    prepare_frame = sig.pos.y == 1124
+    prepare_margin = (sig.pos.y < (MARGIN_Y - 1)) | (sig.pos.y >= (TEXT_BOTTOM - 1))
+    prepare_advance = sig.pos.y >= MARGIN_Y
 
     # Snapshot old register values before any assignment: Pypeline forwards
     # same-call writes, including writes in a separate phase-conditional block.
@@ -330,15 +373,26 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         mail_valid = 0
         load_state = 0
     elif load_phase == 1:
-        # Text BRAM and the explicit prefetch register each take one clock.
-        if prefetch_ready:
+        # Warm text BRAM, codepoint, and registered Unicode page selection.
+        if prefetch_ready == 2:
             load_state = 2
-        prefetch_ready = 1
+        prefetch_ready = prefetch_ready + 1
     elif load_phase == 3:
         # Both requests consume old address/ID registers. No ROM output feeds
         # another ROM address in the same clock.
-        font_addr_a = crop_address
-        font_addr_b = uint10_t(PATTERNS_BASE) + uint10_t(pattern_id)
+        # Forecast both classes after publication, before the mailbox can
+        # stall. Do not chain publication's history updates into BRAM addresses.
+        k1_class: uint5_t = previous_class
+        k2_class: uint5_t = older_class
+        if pending_valid & (pending_kind == 0):
+            k1_class = pending_meta[20:16]
+            k2_class = previous_class
+        k1: uint10_t = (uint10_t(k1_class) << 5) | uint10_t(current_meta[25:21])
+        k2: uint10_t = (uint10_t(k2_class) << 5) | uint10_t(current_meta[25:21])
+        previous_kern_address = uint10_t(config.kerning_base) + (k1 >> 3)
+        older_kern_address = uint10_t(config.kerning_base) + (k2 >> 3)
+        kern1_select = k1[2:0]
+        kern2_select = k2[2:0]
         candidate_previous = previous_origin + int13_t(step_previous)
         load_state = 4
     elif load_phase == 4:
@@ -346,14 +400,6 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         if crop_select:
             crop = font_a[27:16]
         pattern_bits = font_b[20:0]
-        # Forecast the older class after publication: a supported pending
-        # glyph advances history; skipped/control tokens leave it unchanged.
-        k2_class: uint5_t = older_class
-        if pending_valid & (pending_kind == 0):
-            k2_class = previous_class
-        k2: uint10_t = (uint10_t(k2_class) << 5) | uint10_t(current_meta[25:21])
-        font_addr_b = uint10_t(KERNING_BASE) + (k2 >> 3)
-        kern2_select = k2[2:0]
         load_state = 5
     elif (load_phase == 5) & ((~pending_valid) | mail_available):
         # Publication is the only stall point. A holds the map response and
@@ -383,24 +429,19 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         local: uint8_t = uint8_t(font_a >> (uint5_t(map_select) << 3))
         if map_overlay:
             local = font_a[28:21]
-        mapped: uint1_t = page_present & (uint9_t(local) < page_glyph_count)
         # Missing entries and absent Unicode pages use glyph 0 (.notdef).
         # Keep ordinary glyph tokens so fallback ink and advance are retained.
-        prefetched_gid = 0
-        if mapped:
-            prefetched_gid = page_glyph_base + local
-        # Publication advances history before requesting current kerning.
-        k1: uint10_t = (uint10_t(previous_class) << 5) | uint10_t(current_meta[25:21])
-        font_addr_b = uint10_t(KERNING_BASE) + (k1 >> 3)
-        kern1_select = k1[2:0]
+        # Capture selection before comparing the map byte against the loaded
+        # page count. The next phase validates the registered byte.
+        prefetched_local = local
         load_state = 7
     elif load_phase == 7:
-        font_addr_a = uint10_t(METADATA_BASE) + uint10_t(prefetched_gid)
-        font_addr_b = row_lookup.address
+        # Candidate arithmetic and validity run in parallel from registers;
+        # selecting fallback must follow the addition, not precede it.
         row_ink = row_lookup.ink
         row_select = row_lookup.byte_select
         amount_previous = uint4_t(font_b >> (uint5_t(kern1_select) << 2))
-        step_older = int7_t(older_width) + SPACING - int7_t(saved_older_amount)
+        step_older = int7_t(older_width) + int7_t(config.spacing) - int7_t(saved_older_amount)
         load_state = 6
     elif load_phase == 6:
         # Consume the old row/current packet before accepting the new metadata
@@ -413,13 +454,13 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         pending_kind = current_kind
         pending_index = current_index
         pending_after = current_after
-        step_previous = int7_t(previous_width) + SPACING - int7_t(saved_previous_amount)
+        step_previous = int7_t(previous_width) + int7_t(config.spacing) - int7_t(saved_previous_amount)
         candidate_older = older_origin + int13_t(step_older)
         # Register metadata-derived crop address instead of forwarding it to
         # BRAM. Raw crop and prepared row have their own later register cuts.
         current_meta = font_a
         crop_select = font_a[11]
-        crop_address = uint10_t(CROP_BASE) + uint10_t(font_a[15:12])
+        crop_address = uint10_t(config.crop_base) + uint10_t(font_a[15:12])
         current_valid = prefetched_valid
         current_kind = prefetched_kind
         current_index = read_index - 1
@@ -432,24 +473,14 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     # until the previous glyph can be published.
     launch_next: uint1_t = (load_phase == 2) | (load_phase == 4)
     if (~reset_request) & (~stop_request) & launch_next:
-        cp: uint24_t = codepoint
+        cp: uint24_t = mapped_page.codepoint
         prefetched_valid = ~source_done
         prefetched_kind = 0
-        page_present = 0
-        map_overlay = 0
-        page_glyph_base = 0
-        page_glyph_count = 0
+        page_present = mapped_page.present
+        map_overlay = mapped_page.overlay
+        page_metadata_base = config.metadata_base + uint10_t(mapped_page.glyph_base)
+        page_glyph_count = mapped_page.glyph_count
         map_select = cp[1:0]
-        font_addr_a = 0
-        for prefix, map_base, glyph_base, count, overlay in PAGES:
-            if cp[23:8] == prefix:
-                page_present = 1
-                page_glyph_base = uint8_t(glyph_base)
-                page_glyph_count = uint9_t(count)
-                map_overlay = overlay
-                font_addr_a = uint10_t(map_base) + uint10_t(cp[7:2])
-                if overlay:
-                    font_addr_a = uint10_t(map_base) + uint10_t(cp[7:0])
         if read_index >= row_snapshot_end:
             prefetched_kind = 2
             source_done = 1
@@ -461,6 +492,17 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
         byte_read_index = uint12_t(read_index + 1)
         read_index = read_index + 1
         load_state = 5
+
+    if not font_ready:
+        state = 7
+        load_state = 0
+        mail_valid = 0
+        left = 0
+        # A font can become ready in the middle of an active scanline. Keep
+        # that row blank until the normal end-of-row reset and preparation,
+        # rather than reporting a FIFO underflow before any pixels are offered.
+        row_fault = 1
+        underflow = 0
 
     font_request_a = font_addr_a
     font_request_b = font_addr_b
@@ -474,7 +516,7 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
     # FWFT presents the next packed word before it is needed. The consumer
     # pops once per eight visible pixels and shifts one palette index per tick.
     color: uint4_t = 0
-    if sig.active & (~row_fault):
+    if sig.active & (~row_fault) & font_ready:
         if left == 0:
             if fifo.data_out_valid:
                 color = fifo.data_out[3:0]
@@ -503,6 +545,6 @@ def uart_text_scanout(rx: uint1_t) -> uart_text_status_t:
 
 
 @hw_func
-def uart_text_video(rx: uint1_t) -> vga_12bpp_t:
-    status = uart_text_scanout(rx)
+def uart_text_video(rx: uint1_t, config: font_v2_config_t, font_ready: uint1_t) -> vga_12bpp_t:
+    status = uart_text_scanout(rx, config, font_ready)
     return status.video

@@ -4,14 +4,17 @@
 The hardware audit found missing DSP timing and RAMB36 timing arcs referring
 to nonexistent clock pins. The passing results below use an isolated corrected
 database; normal builds do not yet include those corrections.
-The hardware-verified font-v2 build is loaded in volatile SRAM.
-Persistent flash still contains the earlier flickering build.
+The live-update revision has passed physical board validation and is loaded
+in volatile SRAM. Programming persistent configuration flash is a separate step.
 
 `examples/vga_uart_1920_1080_font_v2_demo.py` is the font-v2 renderer at
 148.5 MHz / 1080p. Its capture companion replaces the MMCM with an ideal clock.
 
 ```sh
-python3 scripts/generate_font_v2.py
+# Optional: regenerate the checked-in simulation reference (not the live font).
+../red2-font/.venv/bin/python ../red2-font/generate_font.py v2-reference \
+  examples/hardware/red2_row_data.py --output examples/hardware/red2_font_v2_data.py \
+  --binary build/reference-font-v2.bin
 ./fpgatool.sh sim examples/vga_uart_1920_1080_font_v2_capture.py \
   --no-open --uart-file assets/red2-font-v2-stress.txt --frames 8
 python3 scripts/verify_uart_pixels.py \
@@ -30,7 +33,7 @@ From a checkout, enter the toolchain shell and run the checked build:
 
 ```sh
 ./fpgatool.sh shell
-bash toolchain/build-font-v2.sh
+bash toolchain/build-font-demo-with-corrected-timing.sh
 ```
 
 The wrapper generates an isolated database under `build/font-v2-timingdb`,
@@ -86,12 +89,115 @@ Fallback glyphs paint and participate in width/kerning history like supported
 glyphs. Newline, editing controls, and the existing ignored control tokens keep
 their special behavior.
 
-Generated header/page-directory constants and BRAM initialization still supply
-the prototype. Serial/flash font loading and a serialized header ABI are not
-implemented. The format version and page encoding are explicit exporter data;
-header constants can currently fold during synthesis. This profile supports
-up to 256 global glyph IDs, 32 crop classes, two pattern banks, and 2,048 row
-bytes. Crop-class merging/padding for larger fonts remains future work.
+The hardware demo boots its font from QSPI flash offset **`0x220000`**, the
+Basys 3 `program-data` default. Header/page-directory fields live in registers;
+all 1,024 payload words live in one true-dual-port BRAM. Port A writes during
+loading; both read ports are disabled during replacement. Write commands cross
+a register boundary before the BRAM actor and settle before ready is asserted.
+VGA timing and UART reception continue throughout.
+
+```sh
+# In the sibling red2-font checkout:
+python3 generate_font.py --export v2
+
+# In fpgatool: install the optional host dependency once.
+uv pip install --python .venv/bin/python pyftdi==0.57.1
+
+# Build and load/program the updated demo once (see build commands above).
+# Then update the font without reconfiguring or resetting the FPGA:
+./fpgatool.sh program-data ../red2-font/dist/RED2-Regular-v2.bin --live --reload
+```
+
+`--live` is format-independent: it checks the board's user-data range and
+verifies the written bytes. The exporter produces the font layout; the FPGA
+preflight parser checks header fields, checksum, counts and table/map bounds.
+For host-side font validation, including unique Unicode page prefixes and glyph
+row bounds, run `generate_font.py validate-v2 FONT.bin` in red2-font. Its shared
+compiler validates exported headers as part of generation. The general CLI
+does not parse font images.
+It checks the resident USER2 mailbox signature and requests exclusive
+flash ownership. One PyFtdi connection owns the adapter throughout programming;
+openFPGALoader uses a loopback-only XVC relay with
+`--skip-load-bridge --skip-reset --verify`. The relay preserves Digilent cable
+GPIO levels and substitutes BYPASS for cleanup JSHUTDOWN/JPROGRAM instructions.
+This covers openFPGALoader 1.1.1's unconditional reset after `program_spi()`;
+its `--skip-reset` flag alone does not prevent that reset. Other configuration
+instructions are refused. The resident USER1
+SPI bridge implements openFPGALoader's v1 protocol. During erase/program/verify,
+rendering continues from the old BRAM. With `--reload`, USER2 RELOAD releases the
+flash, rechecks quad-enable, and starts a preflight read. Only a fully validated
+image can request the in-place copy at the start of vertical blanking. The copy
+revalidates the image, then publishes its header registers and ready state.
+The next frame resets text pointers, placement, and kerning through the normal
+frame preparation path. There is no font-buffer bank or frame of black output
+on successful replacement. The loader reserves the last blank line for renderer
+preparation; a missed deadline disables scanout instead of using partial data.
+
+LD14 means active font ready; LD15 means invalid image, flash error, or a missed
+copy deadline. A failed preflight keeps the old font active. A failed in-place
+copy leaves the display black until another successful upload. Host programming
+failure sends RELEASE and never reloads; an interrupted host may leave flash
+ownership granted, requiring recovery/reconfiguration before another upload.
+`--ftdi-serial SERIAL` selects the adapter owned by that single USB connection.
+Plain `program-data` retains the original disruptive programming behavior for
+all other designs/assets. `--live` accepts arbitrary binary data at any allowed
+user-data address and refuses an absent/incompatible mailbox. Without `--reload`,
+it releases ownership without changing active BRAM data or generation. For the
+font demo, write a 4,256-byte font image at `0x220000` and add `--reload`.
+The design's hook owns that fixed address; the host does not infer it from the
+uploaded file. See [the general protocol](live-flash.md) for other designs.
+No board programming is performed by the build.
+
+The standalone exporter uses the same prepared glyphs and validated kerning as
+its web and legacy BRAM exports. The profile supports 256 global glyph IDs
+(including required `.notdef` at ID 0), 32 crop classes, 32 × 32 kerning,
+two pattern banks, 2,048 row bytes, spacing 0–31, and eight Unicode pages.
+Unsupported fonts fail export rather than silently truncating fields.
+
+### Flash binary ABI
+
+`RED2-Regular-v2.bin` is **4,256 bytes**: a fixed 160-byte header followed by
+4,096 bytes of BRAM32. All integers and payload words are little endian.
+Payload addresses are word offsets relative to BRAM word zero, excluding the
+header. The checksum is the two's complement of the sum of all other 32-bit
+words; the sum of the entire image is zero modulo 2³².
+
+| Header word | Value |
+| --- | --- |
+| 0 | Magic `RFV2` (`0x32564652`) |
+| 1–3 | Version `2`, header bytes `160`, payload words `1024` |
+| 4 | Used payload bytes, word aligned (512–4096) |
+| 5–9 | Metadata, crop, rows, kerning, pattern word bases |
+| 10–13 | Glyph, crop, row-byte, allocated pattern counts |
+| 14–15 | Spacing, Unicode page count (1–8) |
+| 16 | Whole-image additive checksum |
+| 17–23 | Reserved zero |
+| 24–39 | Eight two-word page slots; unused slots are zero |
+
+A page's first word packs `prefix:16`, `map_word_base:10`, `encoding:1`, then
+five reserved zero bits, least significant first. Its second word packs
+`glyph_base:8`, `glyph_count:9`, then fifteen reserved zero bits. Encodings
+0 and 1 retain the packed-map and pattern-overlay behavior described above.
+Directory prefixes are unique.
+The loader checks header bounds before writing BRAM and checks the whole-image
+checksum before enabling scanout. Startup/recovery and quad-enable checks reuse
+`QSPI.flash_byte_io`; initialization occurs before the preflight, outside the
+blanking budget. `qspi_burst.read_burst` then sends command/address/dummy once
+(40 SCK), followed by two SCK per byte. At 148.5 MHz with five clocks per half
+period, SCK is 14.85 MHz and 4,256 bytes take approximately 85,526 pixel clocks
+(**0.576 ms**). The 45-line vertical blank is 99,000 pixel clocks (**0.667 ms**);
+the copy deadline is the beginning of its final line (96,800 clocks). This leaves
+about 76 microseconds before that deadline for control and checksum completion.
+The [S25FL032P datasheet](https://www.infineon.com/assets/row/public/documents/10/49/infineon-s25fl032p-32-mbit-3.0-v-flash-memory-datasheet-en.pdf) rates quad-output reads up to 80 MHz; board I/O timing still needs
+physical validation at the chosen 14.85 MHz rate. Loader, header registers, BRAM,
+and renderer share the pixel clock. JTAG control crosses through a held mailbox
+and a toggle synchronizer; SPI clock/pin ownership changes only with both
+masters idle.
+
+The capture harness feeds the serialized reference image through the same
+header decoder and BRAM write interface, bypassing the physical QSPI bus.
+The legacy conversion script also accepts `--binary path.bin` to write this
+ABI alongside its Python reference constants.
 
 ## Renderer schedule
 
@@ -102,31 +208,51 @@ crop and kerning of `g+1`, and Unicode mapping of `g+2`:
 
 | Clock / state | Port A request | Port B request | Response / register work |
 | --- | --- | --- | --- |
-| 0 / 3 | Crop(g+1) from registered crop address | Pattern(g) from registered pattern ID | Previous-origin candidate(g) |
-| 1 / 4 | Unicode map(g+2) | Older kerning(g+1) | Selected 12-bit crop(g+1), 21-bit pattern(g); forecast post-publication older class |
-| 2 / 5 | Hold map(g+2) | Previous kerning(g+1) | Publish(g), mapped ID(g+2), prepared row(g+1), older kerning nibble(g+1) |
-| 3 / 7 | Metadata(g+2) from registered glyph ID | Row ID(g+1) from prepared row | Previous kerning nibble(g+1), older step(g+1), ink/byte selector |
+| 0 / 3 | Crop(g+1) from registered crop address | Pattern(g) from registered pattern ID | Previous-origin candidate(g); registered kerning addresses(g+1) |
+| 1 / 4 | Unicode map(g+2) | Older kerning(g+1) | Selected 12-bit crop(g+1), 21-bit pattern(g); register metadata page base(g+2) |
+| 2 / 5 | Hold map(g+2) | Previous kerning(g+1) | Publish(g), registered map byte(g+2), prepared row(g+1), older kerning nibble(g+1) |
+| 3 / 7 | Metadata(g+2) from registered map byte/page base, or fallback | Row ID(g+1) from prepared row | Previous kerning nibble(g+1), older step(g+1), ink/byte selector |
 | 4 / 6 | Hold metadata(g+2) | Hold row ID(g+1) | Row ID/pending packet(g+1), previous step/older-origin candidate(g+1), metadata and crop-address register(g+2) |
 
-Every dependent ROM request consumes registered data: mapping -> glyph ID,
+Unicode page selection computes each candidate map address in parallel and
+registers the complete selected address on the codepoint prefetch path. Matching
+unique prefixes are reduced in parallel, without a priority chain. Bootstrap waits one additional clock for this cut;
+the steady initiation interval stays at five clocks. The metadata page base
+(`metadata_base + glyph_base`) is registered when the map read launches. The
+map response only selects and registers its byte. The next phase computes the
+candidate metadata address and checks that byte's bounds in parallel, then
+selects the candidate or `.notdef` address. Map validity selects complete addresses after the arithmetic; no BRAM output
+feeds a dependent BRAM address.
+
+Every dependent ROM request consumes registered data: mapping -> map byte,
 metadata -> crop address, crop -> selected crop -> prepared row, and row ID ->
-pattern ID. No ROM output directly feeds another ROM address. Pattern assembly
-is a single [20:0] slice. Each kerning nibble, advance, and origin addition
-crosses a separate register boundary. The older lookup moves before
-publication: if the pending token is a supported glyph, it uses the current
-previous class (which publication will move to older); otherwise it uses the
-existing older class. This preserves history through ignored control tokens;
-undefined printable codepoints advance history using `.notdef`.
-The selected crop and prepared row form two explicit row-arithmetic cuts.
+pattern ID. Pattern assembly is a single [20:0] slice. Each kerning nibble,
+advance, and origin addition crosses a separate register boundary. Both
+kerning addresses are forecast and registered in state 3: publication of a
+glyph will make its left class the previous class and move the old previous
+class to older. Other tokens preserve history. Requests use those stored
+addresses in states 4 and 5, so mailbox publication cannot forward a history
+update into address arithmetic. Undefined printable codepoints advance history
+using `.notdef`. The selected crop and prepared row retain their two explicit
+row-arithmetic cuts.
 
 State 5 waits for mailbox space while the map and older-kerning requests,
 saved pattern, crop, and metadata stay stable. The row helper may repeatedly capture the same
 stable crop there; it never consumes the unrelated map word. Publication
-advances class/origin history before constructing previous-kerning requests;
-Pypeline forwarding is intentional there. State 6 copies the old current
+advances class/origin history while the previous-kerning request uses the
+already prepared address. State 6 copies the old current
 packet into pending before accepting new metadata and prefetched token tags.
 The controller explicitly advances `3 → 4 → 5 → 7 → 6 → 3`; bootstrap is
 `1 → 2 → 5 → 7 → 6 → 3`, with invalid packets discarded.
+
+BRAM requests use a parallel phase selector independent of the compositor's
+reset/stop priority chain. Speculative requests while flushing are discarded;
+phase 5 still holds map/older-kerning responses during publication stalls.
+Scanline preparation registers its beam predicates one clock before use,
+preserving the original `x = WIDTH + 32` handoff and frame-reset schedule.
+The header parser uses a one-hot position for its 40 header words, with cached
+table capacities and registered fault flags. These cuts keep control comparisons
+out of BRAM addresses and distributed header/row register enables.
 
 The lookup-to-publication latency is eleven clocks, while the initiation
 interval remains five. Text cursors use 12 bits for 2,048 codepoints and their
@@ -134,7 +260,108 @@ end/prefetch positions. The existing compositor, row restart/drain behavior,
 binary-to-color conversion, and FIFO handshake are retained. Physical timing
 and board status for this revision are recorded below after validation.
 
-## Current validation and hardware status
+## Live-update validation (2026-10-27)
+
+The selected pin-constrained route passes **148.68 MHz** against the 148.5 MHz
+target, using the isolated corrected timing database and **placement seed 2**.
+The critical path is the header fault reduction through write-enable control;
+setup margin is only about **0.008 ns**, with no reported hold violations.
+Resources are **2,172 LUT2–LUT6**, **2,440 flip-flops**, **one RAMB36E1** for the
+font, **three RAMB18E1** for text, **six RAM32M** for the FIFO, and **zero DSPs**.
+An area optimization remains available: removing the separate active font-header
+snapshot would save **411 mapped flip-flops** (451 declared bits, of which 411
+survive synthesis). It would require reusing the parser/header registers and
+preventing preflight from changing metadata visible to the renderer. Header
+validation and replacement would need to occur while scanout is paused, or use
+a validation-only preflight that does not overwrite those registers. Recheck
+vblank timing, failed-upload recovery, and final pixel placement before making
+that tradeoff. The current implementation deliberately retains the snapshot.
+The font build helper defaults to seed 2 and validates its corresponding report;
+the timing parser also handles nextpnr's aligned multi-clock report columns.
+
+The checked artifact is `build/font-v2-live.bit`, its report is
+`build/font-v2-live-timing.log`, and source hashes are in `build/font-v2-live.json`.
+It was generated from the as-written final netlist, retaining fixed RAM latency,
+with the existing Basys 3 QSPI pull-up workaround. As in the boot-loader route,
+the preliminary throughput sweep was bypassed for this direct final build.
+This is a modeled timing pass with very little margin, not vendor timing signoff.
+The new live-update hardware has not been flashed or physically tested.
+
+Wire-level native simulation checks 0x6B command/address/dummy clocks, quad-pad
+turnaround, byte ordering, complete 4,256-byte bursts within the blanking budget,
+and abort/restart. Loader tests cover two-pass validation, BRAM write ownership,
+waiting for blank start, simultaneous header/data activation, rejected uploads,
+aborted host uploads, missed deadlines, and recovery. GHDL tests exercise the
+actual BSCANE2 wrapper bodies with a controllable primitive model, including
+mailbox bit order, CDC command pulses, malformed transfers, and SPI grant/CS.
+The host tests verify continuous USB ownership, GPIO preservation, bounds/checksum
+rejection before flash access, programmer flags, and commit/abort ordering.
+Relay tests cover fragmented XVC messages and instructions, TMS/TDI/TDO bit
+order, FIFO batching, filtering reset instructions to BYPASS, and TAP resync.
+
+The capture fixture can replace the font spacing with 9 at the sixth vertical
+blank, using the same parser, registered BRAM writes, read-port gating, and
+renderer. It emits words at the 14.85 MHz burst cadence while bypassing SPI pads.
+Compare every captured frame using red2-font's independent binary decoder and
+full-history pixel renderer. The font file must match the original simulation
+fixture; generate it with `v2-reference` as shown above, rather than using a
+newer artwork export:
+
+```sh
+FPGATOOL_FONT_RELOAD_CAPTURE=1 ./fpgatool.sh sim \
+  examples/vga_uart_1920_1080_font_v2_capture.py --frames 8 --no-open \
+  --uart-file assets/red2-font-v2-notdef.txt
+../red2-font/.venv/bin/python ../red2-font/generate_font.py verify-v2-reload \
+  build/basys3/vga_uart_1920_1080_font_v2_capture/sim \
+  assets/red2-font-v2-notdef.txt --font build/reference-font-v2.bin
+```
+
+Eight captured frames match the independent reference exactly: one complete
+old-spacing frame followed by seven complete new-spacing frames. No captured
+frame is mixed or black during the update. The host suite passes 176 tests
+(62 skipped for unavailable optional compiler/runtime dependencies); targeted
+native tests and the two GHDL primitive-wrapper tests pass separately.
+
+The fixture switch is forwarded to elaboration and included in the HDL cache key.
+The wire-level reader, upload controller, JTAG primitive wrappers, and pixel
+capture are checked separately. Physical Basys 3 testing on 2026-10-27 verified
+JTAG erase/program/readback, a vblank reload of the updated 87-glyph font,
+two consecutive uploads advancing generation 1 → 2 → 3, and repeated USB connections retaining font
+ready with no loader error. The bitstream is loaded into volatile SRAM; a board
+power cycle restores whichever design is stored in configuration flash.
+
+## Flash-loading revision validation (2026-10-27)
+
+The final Basys 3 pin-constrained route passes **148.70 MHz** at the
+148.5 MHz target using the isolated corrected timing database and seed 1.
+The critical path is **6.72 ns**, from the prepared-row register through
+row-address arithmetic and request selection into font BRAM. Setup margin is
+only about **0.01 ns**; there are no reported hold violations. This is a
+modeled timing result with very little margin, not vendor timing signoff or
+physical board validation. The user subsequently confirmed this boot-loading
+revision works perfectly on hardware. The live-update revision below requires
+its own validation.
+
+The checked artifact is
+`build/basys3/vga_uart_1920_1080_font_v2_demo/pipelinec/top/top.bit`, with its
+pin-constrained report in the adjacent `open_tools_final.log`. Final mapped
+resources are **2,077 LUT2–LUT6**, **1,880 flip-flops**, **one RAMB36E1** for the
+font, **three RAMB18E1** for text, **six RAM32M** for the FIFO, and **zero DSPs**.
+This run directly generated the as-written final design without the preliminary
+throughput sweep; the fixed one-clock RAM latency and explicit controller
+registers are retained. The normal build wrapper above performs the additional
+preliminary sweep and validates the final report.
+
+The hardware-free capture loads the same serialized image through the header
+parser and registered BRAM write path. Eight HDL frames match the independent
+1920×1080 pixel reference exactly for the 392-byte undefined-character/Unicode
+and editing input. Native checks exercise header bounds, checksum failure,
+truncated data, stalled word input, relocated
+tables, all eight directory slots, and empty non-ASCII glyph rows. The real
+Aseprite `--export v2` output is 4,256 bytes and matches the legacy conversion's
+serialized reference image byte for byte.
+
+## Validation of the earlier compiled-in font build
 
 The selected final board-constrained route uses the isolated corrected timing
 database described in the hardware audit. With undefined-codepoint fallback,
@@ -182,7 +409,7 @@ The selected source snapshots, checksums, captures, reports, and bitstream are
 preserved under `build/banked-hardware-debug/`. The full build/report is in
 `build/basys3/shared_notdef_checked/`; the selected frozen bitstream is
 `build/banked-hardware-debug/notdef_frozen/top.bit`. Build the renamed source
-using the tracked `toolchain/build-font-v2.sh` wrapper described above.
+using the tracked `toolchain/build-font-demo-with-corrected-timing.sh` wrapper described above.
 That script selects the diagnostic chipdb;
 ordinary builds still use the pinned database with its known coverage gaps.
 

@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from simulation.compiled import cache_key, driver_source, read_stream
 
 
@@ -45,6 +46,10 @@ class CompiledSimTests(unittest.TestCase):
             helper.write_text('two')
             self.assertNotEqual(key, cache_key(root, source, 'v1'))
             self.assertNotEqual(cache_key(root, source, 'v1'), cache_key(root, source, 'v2'))
+            with patch.dict('os.environ', {'FPGATOOL_FONT_RELOAD_CAPTURE': '0'}):
+                normal = cache_key(root, source, 'v1')
+            with patch.dict('os.environ', {'FPGATOOL_FONT_RELOAD_CAPTURE': '1'}):
+                self.assertNotEqual(normal, cache_key(root, source, 'v1'))
 
     def test_non_vga_and_multiple_clock_designs_are_rejected(self):
         with self.assertRaisesRegex(ValueError, 'VGA_R0'):

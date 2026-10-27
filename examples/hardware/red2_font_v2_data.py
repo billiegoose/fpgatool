@@ -1,4 +1,4 @@
-"""Generated font v2; regenerate with scripts/generate_font_v2.py."""
+"""Generated reference fixture; use red2-font generate_font.py v2-reference."""
 
 FONT_FORMAT_VERSION = 2
 METADATA_BASE = 0
@@ -144,3 +144,4 @@ FONT_WORDS = (
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0,
 )
+FONT_HEADER_WORDS = (844514898, 2, 160, 1024, 3360, 0, 85, 100, 384, 512, 85, 29, 1133, 264, 4, 2, 926089382, 0, 0, 0, 0, 0, 0, 0, 100663296, 17665, 50855973, 3910, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)

@@ -237,7 +237,7 @@ def validate_final_timing(log: Path) -> None:
         raise FPGAToolError(f"final routing report is missing: {log}")
     clocks = {}
     for name, achieved, status, required in re.findall(
-        r"Max frequency for clock '([^']+)': ([0-9.]+) MHz \((PASS|FAIL) at ([0-9.]+) MHz\)",
+        r"Max frequency for clock\s+'([^']+)': ([0-9.]+) MHz \((PASS|FAIL) at ([0-9.]+) MHz\)",
         log.read_text(),
     ):
         # Placement estimates precede routed results; keep the last per clock.
@@ -352,7 +352,9 @@ def validate_data_flash_write(board: dict, binary: Path, offset: int | None) -> 
     return offset, length, erase_block
 
 
-def openfpgaloader_data_command(board: dict, binary: Path, offset: int) -> list[str]:
+def openfpgaloader_data_command(board: dict, binary: Path, offset: int, *,
+                               live: bool = False, serial: str | None = None,
+                               xvc_port: int | None = None) -> list[str]:
     programmer = board["programmer"]
     if programmer["type"] != "openfpgaloader":
         raise FPGAToolError(f"unsupported programmer type: {programmer['type']}")
@@ -361,7 +363,7 @@ def openfpgaloader_data_command(board: dict, binary: Path, offset: int) -> list[
             f"unsupported program_mode: {programmer.get('program_mode')!r}; expected 'flash'"
         )
     exe = require_tool("openFPGALoader")
-    return [
+    cmd = [
         exe,
         "--board", programmer["board"],
         "-f",
@@ -370,6 +372,13 @@ def openfpgaloader_data_command(board: dict, binary: Path, offset: int) -> list[
         "--verify",
         "--bitstream", str(binary),
     ]
+    if live:
+        cmd += ["--skip-load-bridge", "--skip-reset"]
+    if xvc_port is not None:
+        cmd += ['--cable', 'xvc-client', '--ip', '127.0.0.1', '--port', str(xvc_port)]
+    elif serial:
+        cmd += ["--ftdi-serial", serial]
+    return cmd
 
 
 def openfpgaloader_command(board: dict, bitstream: Path, *, persistent: bool) -> list[str]:
@@ -437,6 +446,12 @@ def cmd_program_data(args: argparse.Namespace) -> None:
     # fpgatool checkout: they are consumed directly by the native programmer.
     binary = Path(args.source).expanduser().resolve()
     offset, length, erase_block = validate_data_flash_write(board, binary, args.offset)
+    live = getattr(args, "live", False)
+    reload = getattr(args, "reload", False)
+    if reload and not live:
+        raise FPGAToolError('--reload requires program-data --live')
+    if live and board.get('live_programming', {}).get('transport') != 'digilent-xc7-user2-v1':
+        raise FPGAToolError('board has no supported resident live-flash transport')
     touched_start = offset & ~(erase_block - 1)
     touched_end = (offset + length + erase_block - 1) & ~(erase_block - 1)
     log = ROOT / "build" / args.board / "program-data.log"
@@ -451,10 +466,21 @@ def cmd_program_data(args: argparse.Namespace) -> None:
             f"the programmer may erase 0x{touched_start:06x}..0x{touched_end - 1:06x}."
         )
     try:
-        run(openfpgaloader_data_command(board, binary, offset), log_path=log)
+        if live:
+            from programming.live_flash import program_live_data
+            serial = args.ftdi_serial
+            program_live_data(binary, lambda port: run(openfpgaloader_data_command(
+                board, binary, offset, live=True, xvc_port=port), log_path=log), serial=serial,
+                reload=reload, reload_timeout=getattr(args, 'reload_timeout', 3))
+        else:
+            run(openfpgaloader_data_command(board, binary, offset,
+                serial=getattr(args, "ftdi_serial", None)), log_path=log)
     except subprocess.CalledProcessError as exc:
         raise FPGAToolError(f"data programming failed; see {log}") from exc
     print(f"✓ Programmed and verified {binary} at 0x{offset:06x}")
+    if live:
+        print('✓ Device reload acknowledged; FPGA kept running' if reload else
+              '✓ Flash ownership released; FPGA kept running')
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -564,6 +590,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("source", nargs="?", help="design source, .bit file, or binary data file depending on command")
     p.add_argument("--board", default=DEFAULT_BOARD, help=f"board profile (default: {DEFAULT_BOARD})")
     p.add_argument("--offset", type=parse_offset, default=None, help="flash byte offset for program-data (default: board user-data start)")
+    p.add_argument("--live", action="store_true", help="program-data: use a resident JTAG flash bridge without FPGA reset")
+    p.add_argument("--reload", action="store_true", help="program-data --live: request device-owned data validation/reload and wait for acknowledgement")
+    p.add_argument("--reload-timeout", type=positive_int, default=3, metavar="SECONDS", help="maximum wait for --reload acknowledgement (default: 3 seconds)")
+    p.add_argument("--ftdi-serial", help="program-data: select the USB/JTAG adapter by FTDI serial number")
     p.add_argument("--comb", action="store_true", help="disable PipelineC auto-pipelining and build the design as written")
     p.add_argument("-v", "--verbose", action="store_true", help="stream full toolchain output")
     p.add_argument("--frames", type=positive_int, default=None, help="sim: stop after N complete frames (default: continuous, or 1 with --no-open)")
@@ -581,6 +611,12 @@ def main() -> int:
     global VERBOSE
     p = parser()
     args = p.parse_args()
+    if args.live and args.command != "program-data":
+        p.error('--live applies only to program-data')
+    if args.reload and (args.command != 'program-data' or not args.live):
+        p.error('--reload requires program-data --live')
+    if args.reload_timeout != 3 and not args.reload:
+        p.error('--reload-timeout requires --reload')
     VERBOSE = args.verbose
     if args.command is None:
         p.print_help()

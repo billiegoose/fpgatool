@@ -1,6 +1,5 @@
 """The new font image reconstructs the independent column-major reference."""
 from pathlib import Path
-from types import SimpleNamespace
 import sys
 import unittest
 
@@ -9,7 +8,6 @@ sys.path[:0] = [str(ROOT/'examples'), str(ROOT/'scripts')]
 from hardware import red2_font_v2_data as font
 from hardware import red2_row_data as old
 from hardware.red2_uart_data import COLUMNS, DESCRIPTORS, ADVANCES
-from generate_font_v2 import compile_font
 
 
 def field(base, index, bits):
@@ -71,23 +69,7 @@ class FontV2Tests(unittest.TestCase):
             if i >= 256:
                 self.assertEqual(word >> 21, 0)
 
-    def test_small_ascii_font_explicitly_reserves_overlay_words(self):
-        source = SimpleNamespace(**vars(old))
-        source.METADATA = tuple(meta if code in (0, ord('A')) else meta & ~256
-                                for code, meta in enumerate(old.METADATA))
-        small = compile_font(source)
-        self.assertEqual(small['PATTERN_COUNT'], 256)
-        self.assertLess(small['USED_BYTES'], 4096)
-        prefix, base, first, count, overlay = small['PAGES'][0]
-        self.assertEqual((prefix, base, first, count, overlay),
-                         (0, small['PATTERNS_BASE'], 1, 1, 1))
-        for low in range(256):
-            self.assertEqual((small['FONT_WORDS'][base+low] >> 21) & 255,
-                             0 if low == ord('A') else 255)
-
-    def test_reproducible_export_and_one_block_capacity(self):
-        generated = compile_font(old)
-        self.assertEqual(generated['FONT_WORDS'], font.FONT_WORDS)
+    def test_reference_image_one_block_capacity(self):
         self.assertEqual(font.USED_BYTES, 3360)
         self.assertEqual(font.KERNING_BASE % 128, 0)
         self.assertEqual(font.PATTERNS_BASE % 512, 0)

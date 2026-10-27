@@ -13,11 +13,17 @@ import time
 
 from simulation.vga import Frame
 
+# Elaboration-time fixture switches must travel into the container and into
+# the cache key; otherwise a capture can silently reuse a different fixture.
+ELABORATION_ENV = ('FPGATOOL_FONT_RELOAD_CAPTURE',)
+
 
 def cache_key(root, source, versions):
     digest = hashlib.sha256()
     digest.update(str(source.relative_to(root)).encode())
     digest.update(versions.encode())
+    for name in ELABORATION_ENV:
+        digest.update(name.encode() + b'=' + os.environ.get(name, '0').encode())
     # Conservative invalidation includes imported local helpers, board modules,
     # compiler patches, the pinned toolchain and the monitor/driver implementation.
     paths = [root / 'toolchain.lock.toml', root / 'fpgatool.py']
@@ -135,7 +141,11 @@ def build(source, pipelinec):
     container_out = '/workspace/' + out.relative_to(tool.ROOT).as_posix()
     log = out / 'build.log'
     print('Compiling the design’s VHDL for simulation (first run or changed design)...', flush=True)
-    cmd = tool.podman_base(pipelinec_dir=pipelinec) + [
+    container = tool.podman_base(pipelinec_dir=pipelinec)
+    for name in ELABORATION_ENV:
+        if name in os.environ:
+            container[-1:-1] = ['-e', f'{name}={os.environ[name]}']
+    cmd = container + [
         'nix', '--extra-experimental-features', 'nix-command flakes',
         'develop', 'path:/workspace/toolchain#simulation', '--command',
         'bash', '/workspace/simulation/build-hdl.sh', '/opt/PipelineC',
