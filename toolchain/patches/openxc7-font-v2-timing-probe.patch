@@ -1,0 +1,99 @@
+--- a/xilinx_gen.py
++++ b/xilinx_gen.py
+@@ -447,6 +447,20 @@
+         cell.add_setup_hold(clock, f"{port}", ClockEdge.RISING, TimingValue(int(entry.setup.minv*1000), int(entry.setup.maxv*1000)),
+                 TimingValue(int(entry.hold.minv*1000), int(entry.hold.maxv*1000)))
+
++    # The physical RAMB36 block has L/U clock pins. Its data bus spans both
++    # halves, so constrain it against both pins (they are driven by the same
++    # logical clock). Existing suffixed address/enable clocks remain exact.
++    def bram36_clocks(clock):
++        return (clock,) if clock.endswith(("L", "U")) else (clock + "L", clock + "U")
++
++    def import_bus_sethold_bram36(cell, port, width, clock, entry):
++        for physical_clock in bram36_clocks(clock):
++            import_bus_sethold(cell, port, width, physical_clock, entry)
++
++    def import_bus_clkq_bram36(cell, port, width, clock, entry):
++        for physical_clock in bram36_clocks(clock):
++            import_bus_clkq(cell, port, width, physical_clock, entry)
++
+     for wsdp, rsdp in ((False, False), (False, True), (True, False), (True, True)):
+         bram18 = timing.add_cell_variant("DEFAULT", f"RAMB18E1_RAMB18E1_{'WSDP' if wsdp else 'WTDP'}_{'RSDP' if rsdp else 'RTDP'}")
+
+@@ -482,10 +496,10 @@
+         for u in ('L', 'U'):
+             for entry in sdf.cells[("RAMBFIFO36E1", "RAMBFIFO36E1")].entries:
+                 if isinstance(entry, parse_sdf.SetupHoldCheck):
+-                    if entry.pin == "ADDRAU": import_bus_sethold(bram36, f"ADDRARDADDR{u}", 15 if u == 'L' else 14, "CLKARDCLK", entry)
+-                    if entry.pin == "ADDRBU": import_bus_sethold(bram36, f"ADDRBWRADDR{u}", 15 if u == 'L' else 14, "CLKBWRCLK", entry)
+-                    if entry.pin == "WEAU": import_bus_sethold(bram36, f"WEA{u}", 4, f"CLKARDCLK{u}", entry)
+-                    if entry.pin == "WEBU": import_bus_sethold(bram36, f"WEBWE{u}", 8, f"CLKBWRCLK{u}", entry)
++                    if entry.pin == "ADDRAU": import_bus_sethold_bram36(bram36, f"ADDRARDADDR{u}", 15 if u == 'L' else 14, f"CLKARDCLK{u}", entry)
++                    if entry.pin == "ADDRBU": import_bus_sethold_bram36(bram36, f"ADDRBWRADDR{u}", 15 if u == 'L' else 14, f"CLKBWRCLK{u}", entry)
++                    if entry.pin == "WEAU": import_bus_sethold_bram36(bram36, f"WEA{u}", 4, f"CLKARDCLK{u}", entry)
++                    if entry.pin == "WEBU": import_bus_sethold_bram36(bram36, f"WEBWE{u}", 8, f"CLKBWRCLK{u}", entry)
+             for entry in sdf.cells[("RAMBFIFO36E1_ISFIFO_FALSE", "RAMBFIFO36E1")].entries:
+                 if isinstance(entry, parse_sdf.SetupHoldCheck):
+                     if entry.pin == "ENARDENU": import_pin_sethold(bram36, f"ENARDEN{u}", f"CLKARDCLK{u}", entry)
+@@ -494,18 +508,36 @@
+                     if entry.pin == "RSTRAMBU": import_pin_sethold(bram36, f"RSTRAMB{u}", f"CLKBWRCLK{u}", entry)
+         for entry in sdf.cells[("RAMBFIFO36E1RAM_MODE_RAMB18TDP_U_WRITE_MODE_U_NC_EN_ECC_READ_FALSE_EN_ECC_WRITE_FALSE", "RAMBFIFO36E1")].entries:
+             if isinstance(entry, parse_sdf.SetupHoldCheck):
+-                if entry.pin == "DIADIU": import_bus_sethold(bram36, "DIADI", 32, "CLKBWRCLK" if wsdp else "CLKARDCLK", entry)
+-                if entry.pin == "DIBDIU": import_bus_sethold(bram36, "DIBDI", 32, "CLKBWRCLK", entry)
+-                if entry.pin == "DIPADIPU": import_bus_sethold(bram36, "DIPADIP", 4, "CLKBWRCLK" if wsdp else "CLKARDCLK", entry)
+-                if entry.pin == "DIPBDIPU": import_bus_sethold(bram36, "DIPBDIP", 4, "CLKBWRCLK", entry)
++                if entry.pin == "DIADIU": import_bus_sethold_bram36(bram36, "DIADI", 32, "CLKBWRCLK" if wsdp else "CLKARDCLK", entry)
++                if entry.pin == "DIBDIU": import_bus_sethold_bram36(bram36, "DIBDI", 32, "CLKBWRCLK", entry)
++                if entry.pin == "DIPADIPU": import_bus_sethold_bram36(bram36, "DIPADIP", 4, "CLKBWRCLK" if wsdp else "CLKARDCLK", entry)
++                if entry.pin == "DIPBDIPU": import_bus_sethold_bram36(bram36, "DIPBDIP", 4, "CLKBWRCLK", entry)
+         for entry in sdf.cells[("RAMBFIFO36E1RAM_MODE_U_RAMB18SDP_U_DOA_REG_U_0_EN_ECC_READ_FALSE", "RAMBFIFO36E1")].entries:
+             if isinstance(entry, parse_sdf.IOPath):
+-                if entry.to_pin == "DOADOU": import_bus_clkq(bram36, "DOADO", 32, "CLKARDCLK", entry)
+-                if entry.to_pin == "DOPADOPU": import_bus_clkq(bram36, "DOPADOP", 4, "CLKARDCLK", entry)
++                if entry.to_pin == "DOADOU": import_bus_clkq_bram36(bram36, "DOADO", 32, "CLKARDCLK", entry)
++                if entry.to_pin == "DOPADOPU": import_bus_clkq_bram36(bram36, "DOPADOP", 4, "CLKARDCLK", entry)
+         for entry in sdf.cells[("RAMBFIFO36E1RAM_MODE_U_RAMB18TDP_U_DOB_REG_U_0_EN_ECC_READ_FALSE", "RAMBFIFO36E1")].entries:
+             if isinstance(entry, parse_sdf.IOPath):
+-                if entry.to_pin == "DOBDOU": import_bus_clkq(bram36, "DOBDO", 32, "CLKARDCLK" if rsdp else "CLKBWRCLK", entry)
+-                if entry.to_pin == "DOPBDOPU": import_bus_clkq(bram36, "DOPBDOP", 4, "CLKARDCLK" if rsdp else "CLKBWRCLK", entry)
++                if entry.to_pin == "DOBDOU": import_bus_clkq_bram36(bram36, "DOBDO", 32, "CLKARDCLK" if rsdp else "CLKBWRCLK", entry)
++                if entry.to_pin == "DOPBDOPU": import_bus_clkq_bram36(bram36, "DOPBDOP", 4, "CLKARDCLK" if rsdp else "CLKBWRCLK", entry)
++
++def import_unregistered_multiplier_timings(timing, sdf):
++    # Diagnostic model ONLY: valid for the renderer's AREG=BREG=MREG=PREG=0,
++    # DIRECT A/B, USE_DPORT=FALSE, USE_MULT=MULTIPLY configuration.
++    dsp = timing.add_cell_variant("DEFAULT", "DSP48E1_DSP48E1")
++    for port, width, kind in (
++        ("A", 30, "DSP48E1_AREG_0_A_INPUT_DIRECT_MREG_0_PREG_0_USE_DPORT_FALSE_USE_MULT_MULTIPLY"),
++        ("B", 18, "DSP48E1_BREG_0_B_INPUT_DIRECT_MREG_0_PREG_0_USE_MULT_MULTIPLY")):
++        entries = [e for e in sdf.cells[(kind, "DSP48E1")].entries
++                   if isinstance(e, parse_sdf.IOPath) and e.from_pin == port and e.to_pin == "P"]
++        assert len(entries) == 1
++        e = entries[0]
++        delay = TimingValue(int(min(e.rising.minv,e.falling.minv)*1000),
++                            int(max(e.rising.maxv,e.falling.maxv)*1000))
++        for i in range(width):
++            for j in range(48):
++                dsp.add_comb_arc(f"{port}{i}",f"P{j}",delay)
++
+
+ def main():
+     xlbase = path.join(path.dirname(path.realpath(__file__)), "..")
+@@ -612,6 +644,7 @@
+         lut.add_setup_hold("CLK", f"WA{i}", ClockEdge.RISING, TimingValue(100, 500), TimingValue(100, 200))
+     lut.add_setup_hold("CLK", "WE", ClockEdge.RISING, TimingValue(100, 600), TimingValue(100, 100))
+     lut.add_setup_hold("CLK", "DI1", ClockEdge.RISING, TimingValue(100, 100), TimingValue(100, 100))
++    lut.add_setup_hold("CLK", "DI2", ClockEdge.RISING, TimingValue(100, 100), TimingValue(100, 100))
+     ff = ch.timing.add_cell_variant("DEFAULT", "SLICE_FFX")
+     ff.add_setup_hold("CK", "CE", ClockEdge.RISING, TimingValue(100, 100), TimingValue(0, 0))
+     ff.add_setup_hold("CK", "SR", ClockEdge.RISING, TimingValue(100, 100), TimingValue(0, 0))
+@@ -631,6 +664,7 @@
+     import_sdf_timings(carry, slicem_sdf.cells[("CARRY4", "SLICEM")])
+
+     import_bram_timings(ch.timing, parse_sdf.parse_sdf_file(path.join(timings_root, "timings", "BRAM_L.sdf")))
++    import_unregistered_multiplier_timings(ch.timing, parse_sdf.parse_sdf_file(path.join(timings_root, "timings", "DSP_L.sdf")))
+
+     # Import package pins
+     for package_name, package in sorted(d.packages.items(), key=lambda x:x[0]):

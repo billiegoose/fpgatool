@@ -1,0 +1,2 @@
+# UART fixtures contain intentional editing/control bytes and CRLF sequences.
+assets/red2-font-v2-*.txt -text whitespace=cr-at-eol

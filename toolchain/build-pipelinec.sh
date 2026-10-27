@@ -52,6 +52,9 @@ done
 # accept clock primitives with no register-to-register characterization path.
 # Apply to disposable module copies; never modify the pinned checkout.
 patch --batch --forward -p1 -d "$compat_dir" < /workspace/toolchain/patches/pypeline-native-clock-wires.patch
+# Keep synthetic BoolOp truthiness comparisons distinct from real comparisons
+# that occupy the same source span.
+patch --batch --forward -p1 -d "$compat_dir" < /workspace/toolchain/patches/pypeline-boolop-instance-names.patch
 # Keep throughput-sweep snapshots from duplicating the compiled logic graph.
 patch --batch --forward -p1 -d "$compat_dir" < /workspace/toolchain/patches/pipelinec-timing-snapshot-memory.patch
 export PYTHONPATH="$compat_dir/src:$pipelinec_dir/src:$pipelinec_dir/include/pypeline${PYTHONPATH:+:$PYTHONPATH}"

@@ -11,7 +11,7 @@ def assign_glyph_ids(glyphs):
     return {mapping[code]: glyph for code, glyph in glyphs.items()}, extra
 
 
-def edited_glyph_ids(data, unicode_codepoints, capacity=8192):
+def edited_glyph_ids(data, unicode_codepoints, capacity=8192, missing_glyph=None):
     """Independent UART reference: UTF-8 decode before the glyph edit buffer."""
     import codecs
     decoder = codecs.getincrementaldecoder('utf-8')('ignore')
@@ -25,7 +25,7 @@ def edited_glyph_ids(data, unicode_codepoints, capacity=8192):
             continue
         for character in decoder.decode(bytes((byte,))):
             code = ord(character)
-            glyph = code if code < 128 else lookup.get(code)
+            glyph = code if code < 128 else lookup.get(code, missing_glyph)
             if glyph is not None and len(result) < capacity:
                 result.append(glyph)
     return result

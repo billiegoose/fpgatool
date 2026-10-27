@@ -10,8 +10,8 @@ sys.path.insert(0, str(ROOT / 'examples'))
 from hardware.red2_uart_data import COLUMNS, DESCRIPTORS, ADVANCES, UNICODE_CODEPOINTS
 
 
-def expected_pixels(text, width=1920, height=1080, margin_x=5, margin_y=2):
-    text = edited_glyph_ids(text, UNICODE_CODEPOINTS)
+def expected_pixels(text, width=1920, height=1080, margin_x=5, margin_y=2, notdef=False):
+    text = edited_glyph_ids(text, UNICODE_CODEPOINTS, missing_glyph=0 if notdef else None)
     pixels = bytearray(width * height)
     right, bottom = width - margin_x, height - margin_y
     y, history = margin_y, []
@@ -21,7 +21,10 @@ def expected_pixels(text, width=1920, height=1080, margin_x=5, margin_y=2):
             history = []
             continue
         if not DESCRIPTORS[code] & (1 << 19):
-            continue
+            if notdef and code >= 32:
+                code = 0
+            else:
+                continue
         descriptor = DESCRIPTORS[code]
         base, glyph_width = descriptor & 2047, (descriptor >> 11) & 255
         x = max((left_x + ADVANCES[(left << 8) | code]
@@ -47,10 +50,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('capture', type=Path)
     parser.add_argument('text', type=Path)
+    parser.add_argument('--notdef', action='store_true',
+                        help='render undefined codepoints as glyph 0 (banked font consumers)')
     args = parser.parse_args()
     actual = Image.open(args.capture).convert('RGB')
     expected = Image.frombytes('L', actual.size,
-                              expected_pixels(args.text.read_bytes(), *actual.size)).convert('RGB')
+                              expected_pixels(args.text.read_bytes(), *actual.size,
+                                              notdef=args.notdef)).convert('RGB')
     diff = ImageChops.difference(actual, expected)
     if diff.getbbox():
         path = args.capture.with_name(args.capture.stem + '-diff.png')

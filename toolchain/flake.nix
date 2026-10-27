@@ -120,6 +120,21 @@
           chipdb = self.packages.${system}.basys3-chipdb;
           py = pkgs.python312Packages;
           pyPkgPath = "/lib/python3.12/site-packages/";
+          # Match the estimator dependency in the pinned PipelineC nix/package.nix.
+          # Fixed AUTO_PIPELINE stages need this even in HDL-only simulation.
+          pyrtl = py.buildPythonPackage rec {
+            pname = "pyrtl";
+            version = "0.11.3";
+            pyproject = true;
+            src = pkgs.fetchPypi {
+              inherit pname version;
+              hash = "sha256-F+2L55HPe1N7FuhWRlonSeB8FArOgVu54QATKn/0Otk=";
+            };
+            build-system = [ py.hatchling py.hatch-vcs ];
+            dependencies = [ py.pyparsing ];
+            doCheck = false;
+            pythonImportsCheck = [ "pyrtl" ];
+          };
           openxc7PythonPath = nixpkgs.lib.concatStrings [
             "${tc.prjxray}/usr/share/python3/:"
             "${fasmLite}${pyPkgPath}:"
@@ -141,6 +156,7 @@
               pkgs.yosys pkgs.ghdl pkgs.yosys-ghdl pkgs.gcc pkgs.patch
               (pkgs.python312.withPackages (p: [
                 p.pycparser p.pyyaml p.textx p.simplejson p.intervaltree p.distutils
+                pyrtl
               ]))
             ];
             shellHook = ''

@@ -36,6 +36,15 @@ class FPGAToolTests(unittest.TestCase):
         self.assertRegex(lock["pipelinec"]["rev"], r"^[0-9a-f]{40}$")
         self.assertRegex(lock["openxc7"]["rev"], r"^[0-9a-f]{40}$")
 
+    def test_build_applies_boolop_instance_name_compatibility_patch(self):
+        build = (ROOT / "toolchain" / "build-pipelinec.sh").read_text()
+        patch = (
+            ROOT / "toolchain" / "patches" / "pypeline-boolop-instance-names.patch"
+        ).read_text()
+        self.assertIn("pypeline-boolop-instance-names.patch", build)
+        self.assertIn("_pypeline_generated_inst_tag", patch)
+        self.assertIn("boolop_{operand_index}", patch)
+
     def test_exact_clean_checkout_can_be_reused(self):
         with mock.patch.object(fpgatool, "output") as output_mock:
             output_mock.side_effect = [

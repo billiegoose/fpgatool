@@ -322,6 +322,16 @@ seven-segment display and `ABC` on VGA. Replace the port with the board's curren
 UART device. Add `--delay-ms 10` to compare paced bytes against the default
 continuous stream while diagnosing reception.
 
+### Font v2 1080p UART demo
+
+`examples/vga_uart_1920_1080_font_v2_demo.py` is the non-AA renderer using the
+version-2 font layout: one font BRAM, banked row patterns, crop classes, and
+Unicode maps stored with the font. Undefined codepoints render `.notdef`.
+Its simulation harness is `examples/vga_uart_1920_1080_font_v2_capture.py`;
+regenerate its font image with `scripts/generate_font_v2.py`.
+See [the font-v2 renderer notes](docs/font-v2-renderer.md) for commands, the
+memory layout, and the corrected timing-model requirements.
+
 ### Anti-aliased 1080p UART demo
 
 `examples/vga_uart_1920_1080_aa_demo.py` is the four-shade version of the
