@@ -374,7 +374,7 @@ does not simulate MMCMs. `--uart-file` drives actual 8-N-1 serial bits into
 README sample to arrive and a stable frame to be captured.
 
 The checked-in font data comes directly from raw Aseprite slices and the
-adjacent font's `antialias_font.compile_glyph()` implementation, independent
+adjacent font's `src.antialias.compile_glyph()` implementation, independent
 of R2BF. Regenerate the row ROMs, column data for verification, and README
 sample from the adjacent `red2-font` checkout (requires Aseprite and its Pillow
 environment):

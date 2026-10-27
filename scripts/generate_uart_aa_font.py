@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Export raw RED2 artwork and kerning as ordinary Pypeline ROM constants."""
 import argparse
-import ast
 from pathlib import Path
 import sys
 from kerning_history import verify_two_glyph_history
@@ -17,7 +16,8 @@ def main():
     args = parser.parse_args()
     sys.path.insert(0, str(args.font_dir.resolve()))
     from render_font import load_glyphs, AutoKerning
-    from antialias_font import compile_glyph, FITTED_PALETTE
+    from src.specimen import EXAMPLE_TEXT
+    from src.antialias import compile_glyph, FITTED_PALETTE
     glyphs, unicode_codepoints = assign_glyph_ids(load_glyphs(args.font_dir / 'RED2 Font.aseprite', args.aseprite))
     kerning = AutoKerning(glyphs, spacing=4)
     aa_glyphs = {code: compile_glyph(glyph) for code, glyph in glyphs.items()}
@@ -147,16 +147,7 @@ def main():
             row_lines.append('    ' + ', '.join(map(str, values[start:start+16])) + ',')
         row_lines.append(')\n')
     (ROOT / 'examples/hardware/red2_aa_row_data.py').write_text('\n'.join(row_lines))
-    # Copy the exact README sample, without importing its tests at runtime.
-    tree = ast.parse((args.font_dir / 'test_render_font.py').read_text())
-    for statement in tree.body:
-        if isinstance(statement, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'EXAMPLE_TEXT'
-                                                     for t in statement.targets):
-            text = ast.literal_eval(statement.value)
-            (ROOT / 'assets/red2-readme-example.txt').write_text(text)
-            break
-    else:
-        raise ValueError('Could not find the README example text')
+    (ROOT / 'assets/red2-readme-example.txt').write_text(EXAMPLE_TEXT)
     print(f'Generated {len(glyphs)} glyphs, {len(columns)} columns and glyph-ID pair advances: {output}')
 
 
