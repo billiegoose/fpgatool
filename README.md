@@ -9,6 +9,27 @@ The first supported vertical slice is PipelineC/OpenXC7 -> Digilent Basys 3 ->
 
 ## Quick start
 
+Install the CLI once with `uv` (Python 3.12 or later) and a symlink on your `PATH`:
+
+```sh
+uv venv --python 3.12 .venv
+mkdir -p ~/bin
+ln -s "$(pwd)/fpgatool.sh" ~/bin/fpgatool
+```
+
+With `~/bin` on your `PATH`, `fpgatool` works from any directory without
+activating the virtual environment. The shell launcher `fpgatool.sh` follows
+symlinks and explicitly uses `.venv/bin/python`; `fpgatool.py` contains the
+implementation. Relative input paths are resolved against the working directory
+first, then against this checkout (for built-in `examples/` and `build/` paths).
+Design sources must currently live inside the checkout. For example, from `/tmp`:
+
+```sh
+fpgatool --help
+fpgatool build examples/blink.py
+fpgatool load build/basys3/blink/blink.bit
+```
+
 With Podman and `openFPGALoader` installed, a bare invocation prints usage and
 does not touch hardware:
 

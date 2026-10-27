@@ -183,7 +183,11 @@ def ensure_pipelinec() -> Path:
 def normalize_source(path: str | Path) -> Path:
     source = Path(path).expanduser()
     if not source.is_absolute():
-        source = (Path.cwd() / source).resolve()
+        # Prefer an explicit path in the invoking directory. When absent,
+        # resolve bundled examples and build outputs from the checkout so
+        # the CLI works through ~/bin/fpgatool from any directory.
+        local = (Path.cwd() / source).resolve()
+        source = local if local.is_file() else (ROOT / source).resolve()
     else:
         source = source.resolve()
     if not source.is_file():
@@ -553,7 +557,7 @@ def cmd_shell(args: argparse.Namespace) -> None:
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="fpgatool.sh",
+        prog="fpgatool",
         description="Build or simulate FPGA designs, load volatile SRAM, or program persistent flash.",
     )
     p.add_argument("command", nargs="?", choices=("build", "load", "run", "sim", "program", "program-data", "doctor", "shell"))
