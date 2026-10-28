@@ -97,9 +97,10 @@ address or length. A compatible resident bridge is required. The board profile
 selects the cable/FPGA transport; the current implementation supports Digilent
 Artix-7 with a six-bit JTAG instruction register. See the
 [resident protocol and hardware integration guide](docs/live-flash.md) when adding
-it to another design. The reusable `fpgatool_board.basys3.live_flash.service()`
-bundles the bridge, ownership handshake, and QSPI pin routing; each application
-supplies its own data loader and activation policy.
+it to another design. The reusable `fpgatool_board.basys3.live_flash.proxy()`
+bundles the bridge and ownership handshake, accepts MISO, and returns the
+selected QSPI bus. The top level drives the pins; each application supplies its
+own data loader and activation policy.
 Normal builds keep the underlying Nix/PipelineC/programmer output quiet and save it
 as `build.log`, `load.log`, or `program.log` beside the design output. Pass
 `--verbose` (or `-v`) to stream the full tool output directly to the terminal.
@@ -375,6 +376,9 @@ The live uploader owns USB throughout programming. openFPGALoader uses a
 loopback-only XVC relay, which preserves Digilent GPIO levels and replaces its
 cleanup JSHUTDOWN/JPROGRAM instructions with BYPASS. This also handles the
 unconditional reset in openFPGALoader 1.1.1 despite `--skip-reset`.
+The [font-v2 module guide](docs/font-v2-module.md) describes the reusable glyph-row
+reader and its explicit text/font memory interfaces.
+
 See [the font-v2 renderer notes](docs/font-v2-renderer.md) for commands, the
 memory layout, and the corrected timing-model requirements.
 

@@ -10,9 +10,9 @@ import fpgatool_board.basys3.part35t
 import fpgatool_board.basys3.vga as board_vga
 import fpgatool_board.basys3.uart as board_uart
 import hardware.vga_uart_font_v2_pixels as renderer
-from hardware.font_v2_rom import make_font_v2_rom
-from hardware.font_v2_loader import consume_font_word
-from hardware.font_v2_format import HEADER_WORDS, PAYLOAD_WORDS
+from hardware.font_v2.memory import make_font_v2_rom
+from hardware.font_v2.loader import consume_font_word
+from hardware.font_v2.format import HEADER_WORDS, PAYLOAD_WORDS
 from hardware import red2_font_v2_data as reference
 import os
 _font = make_font_v2_rom()

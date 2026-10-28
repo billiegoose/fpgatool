@@ -3,23 +3,13 @@
 from pypeline import *
 from hardware import QSPI
 from hardware.qspi_burst import read_burst
-from hardware.font_v2_format import (MAGIC, VERSION, HEADER_BYTES, HEADER_WORDS,
+from hardware.font_v2.format import (MAGIC, VERSION, HEADER_BYTES, HEADER_WORDS,
                                     PAYLOAD_WORDS, PAGE_WORD_BASE, MAX_PAGES)
 
 FONT_FLASH_OFFSET = 0x220000
 
 
-@struct
-class font_v2_config_t(NamedTuple):
-    metadata_base: uint10_t
-    crop_base: uint10_t
-    rows_base: uint10_t
-    kerning_base: uint10_t
-    patterns_base: uint10_t
-    spacing: uint5_t
-    page_count: uint4_t
-    pages_a: uint32_t[MAX_PAGES]
-    pages_b: uint17_t[MAX_PAGES]
+from hardware.font_v2.types import font_v2_config_t
 
 
 @struct

@@ -6,7 +6,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'examples'))
-from hardware.font_v2_format import HEADER_WORDS
+from hardware.font_v2.format import HEADER_WORDS
 from hardware import red2_font_v2_data as reference
 try:
     import pypeline as p
@@ -14,7 +14,7 @@ except ImportError:
     p = None
 else:
     from hardware import QSPI
-    from hardware.font_v2_loader import load_font_from_qspi
+    from hardware.font_v2.loader import load_font_from_qspi
     from hardware.live_flash import live_flash_control, live_flash_application_t
     from hardware.live_flash_protocol import BEGIN, RELOAD, RELEASE
     from hardware.qspi_burst import read_burst, qspi_burst_t

@@ -7,8 +7,8 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 OUT="$ROOT/build/basys3/vga_uart_1920_1080_font_v2_demo"
 export FPGA_TOOL_CHIPDB_DIR="$ROOT/build/font-v2-timingdb"
-# The reusable live-flash service is validated with placement seed 4.
-export PIPELINEC_OPEN_TOOLS_SEED="${PIPELINEC_OPEN_TOOLS_SEED:-4}"
+# The reusable glyph reader and live-flash proxy are validated with seed 1.
+export PIPELINEC_OPEN_TOOLS_SEED="${PIPELINEC_OPEN_TOOLS_SEED:-1}"
 python3 scripts/build_font_v2_timing_db.py --output "$FPGA_TOOL_CHIPDB_DIR"
 bash toolchain/build-pipelinec.sh /opt/PipelineC \
     "$ROOT/examples/vga_uart_1920_1080_font_v2_demo.py" "$OUT" \

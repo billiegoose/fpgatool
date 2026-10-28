@@ -9,7 +9,7 @@ try:
 except ImportError:
     p = None
 else:
-    from hardware.font_v2_row_address import (calculate_row_address, row_address,
+    from hardware.font_v2.row_address import (calculate_row_address, row_address,
                                                   capture_row_address, row_address_input_t)
     from hardware import red2_font_v2_data as font
 

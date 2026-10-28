@@ -6,17 +6,18 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'examples'))
-from hardware.font_v2_format import HEADER_WORDS, CHECKSUM_WORD
+from hardware.font_v2.format import HEADER_WORDS, CHECKSUM_WORD
 from hardware import red2_font_v2_data as font
 try:
     import pypeline as p
 except ImportError:
     p = None
 else:
-    from hardware.font_v2_loader import (consume_font_word, load_font_from_qspi,
-                                        font_v2_config_t, FONT_FLASH_OFFSET)
+    from hardware.font_v2.loader import (consume_font_word, load_font_from_qspi,
+                                        FONT_FLASH_OFFSET)
+    from hardware.font_v2.types import font_v2_config_t
     from hardware import QSPI
-    from hardware.font_v2_map import lookup_unicode_page
+    from hardware.font_v2.mapping import lookup_unicode_page
 
 
 def fixture():

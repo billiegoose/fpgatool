@@ -55,33 +55,43 @@ flash even when an application retains an older active copy in BRAM.
 
 ## Adding the hardware to a demo
 
-Import `fpgatool_board.basys3.live_flash` and call its `service()` once per
-application clock. It owns the physical QSPI outputs, STARTUPE2 clock routing,
-USER1 SPI bridge, USER2 mailbox, USER4 compatibility response, ownership state
-machine, status register, and generation counter. The font demo uses this same
-module; there is no font dependency in the service.
+Import `fpgatool_board.basys3.live_flash` and call `proxy()` once per
+application clock. It contains the USER1 SPI bridge, USER2 mailbox, USER4
+compatibility response, ownership state machine, status and generation.
+It reads no physical pins and drives no QSPI outputs. Pass MISO explicitly;
+the result contains the selected application/host bus and control status.
+The top level binds that bus to QSPI and STARTUPE2.
 
 ```python
 import fpgatool_board.basys3.live_flash as live_flash
+import fpgatool_board.basys3.qspi as board_qspi
 from hardware.live_flash import live_flash_application_t
 
-# Inside your clocked @hw_func, using your own loader/controller:
+# Inside the top-level actor, using your own loader/controller:
+dq = concat(board_qspi.QspiDQ3_I, board_qspi.QspiDQ2_I,
+            board_qspi.QspiDQ1_I, board_qspi.QspiDQ0_I)
 asset = load_asset(dq, live_flash.pause,
                    live_flash.reload_request, live_flash.clear_error)
-live_flash.service(asset.flash, live_flash_application_t(
-    ready=asset.ready,
-    busy=asset.busy,
-    quiescent=asset.quiescent,
-    done=asset.done,
-    error=asset.error))
+selected = live_flash.proxy(asset.flash, live_flash_application_t(
+    ready=asset.ready, busy=asset.busy, quiescent=asset.quiescent,
+    done=asset.done, error=asset.error), dq[1])
+flash = selected.flash
+board_qspi.QspiCSn = board_qspi.drive_clock_and_cs(
+    flash.cclk, flash.cs_n, not flash.busy)
+board_qspi.QspiDQ0_O = flash.dq0
+board_qspi.QspiDQ0_T = flash.dq0_t
+board_qspi.QspiDQ1_O = flash.dq1
+board_qspi.QspiDQ1_T = flash.dq1_t
+board_qspi.QspiDQ2_O = flash.dq2
+board_qspi.QspiDQ2_T = flash.dq2_t
+board_qspi.QspiDQ3_O = flash.dq3
+board_qspi.QspiDQ3_T = flash.dq3_t
 ```
 
-`load_asset` above is an application-defined function. Its `flash` output uses
-`hardware.QSPI.qspi_flash_byte_io_t`. Sample the four input pads through
-`fpgatool_board.basys3.qspi.QspiDQ0_I` through `QspiDQ3_I`, as in the font demo.
-The exported request wires connect the service to your loader without extra
-top-level JTAG or pin-routing code. Instantiate one service, in one clock domain;
-other logic must not drive those QSPI outputs or use its three USER chains.
+The logical feedback wires `pause`, `reload_request`, and `clear_error` let
+an application run before the proxy in the same clock without adding a register.
+They are internal signals, not board pin declarations. Instantiate one proxy
+per design, in the same clock domain as its application.
 
 | Signal | Application contract |
 | --- | --- |
@@ -104,11 +114,11 @@ The font loader only accesses flash during boot or reload, so its idle state is
 already quiescent. It takes `reload_request` and `clear_error` directly and
 reports its loading status, leaving all host commands outside the loader.
 Its font-specific bounds checks, single-BRAM writes, and vblank scheduling stay
-in `hardware/font_v2_loader.py`.
+in `hardware/font_v2/loader.py`.
 
 For another board, reuse `hardware/live_flash.py`, the application-independent
-ownership/reload controller. Supply the board's mailbox, SPI bridge, and pin
-routing around it, following `fpgatool_board/basys3/live_flash.py`. The existing
+ownership/reload controller. Supply the board's mailbox and SPI bridge around it,
+following `fpgatool_board/basys3/live_flash.py`. The existing
 `jtag_flash.py` contains the low-level Xilinx primitive wrappers.
 
 ## Wire ABI and board transport

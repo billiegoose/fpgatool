@@ -1,5 +1,10 @@
 # Font v2 non-AA renderer
 
+For the reusable glyph-row interface and module layout, see
+[font-v2-module.md](font-v2-module.md). The UART/VGA demo is an adapter around
+that reader. Historical timing and board results below describe the builds
+that produced them; new source changes require their own route validation.
+
 **Timing qualification:** the pinned OpenXC7 timing database is incomplete.
 The hardware audit found missing DSP timing and RAMB36 timing arcs referring
 to nonexistent clock pins. The passing results below use an isolated corrected
@@ -295,8 +300,9 @@ These measurements describe the original inline live-update implementation.
 
 ### Reusable service validation (2026-10-27)
 
-The demo now uses `fpgatool_board.basys3.live_flash.service()` for resident JTAG,
-QSPI routing, ownership, and reload acknowledgement. The font loader retains
+This build introduced the reusable resident JTAG/flash service with ownership
+and reload acknowledgement. The current `live_flash.proxy()` interface returns
+the selected QSPI bus for the top to drive. The font loader retains
 format validation and vblank activation. See the [integration guide](live-flash.md#adding-the-hardware-to-a-demo)
 for the application handshake and use in other demos.
 

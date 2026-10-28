@@ -1,8 +1,8 @@
 # pyright: reportInvalidTypeForm=none
 """Register Unicode page selection and its complete map read address."""
 from pypeline import *
-from hardware.font_v2_loader import font_v2_config_t
-from hardware.font_v2_format import MAX_PAGES
+from hardware.font_v2.types import font_v2_config_t
+from hardware.font_v2.format import MAX_PAGES
 
 
 @struct
