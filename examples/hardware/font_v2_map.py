@@ -18,9 +18,13 @@ class font_v2_page_t(NamedTuple):
 
 @hw_func
 def lookup_unicode_page(cp: uint24_t, config: font_v2_config_t) -> font_v2_page_t:
-    selected: Reg[font_v2_page_t]
-    saved: font_v2_page_t = selected
-    selected = font_v2_page_t(codepoint=cp, present=0, map_base=0, map_address=0,
+    lower: Reg[font_v2_page_t]
+    upper: Reg[font_v2_page_t]
+    saved_lower: font_v2_page_t = lower
+    saved_upper: font_v2_page_t = upper
+    lower = font_v2_page_t(codepoint=cp, present=0, map_base=0, map_address=0,
+                              glyph_base=0, glyph_count=0, overlay=0)
+    upper = font_v2_page_t(codepoint=0, present=0, map_base=0, map_address=0,
                               glyph_base=0, glyph_count=0, overlay=0)
     for page in range(MAX_PAGES):
         a: uint32_t = config.pages_a[page]
@@ -41,12 +45,27 @@ def lookup_unicode_page(cp: uint24_t, config: font_v2_config_t) -> font_v2_page_
             first = b[7:0]
             count = b[16:8]
             overlay = a[26]
-        # V2 directory prefixes are unique. An OR reduction of these masked
-        # fields avoids an eight-entry priority mux on every selected bit.
-        selected.present = selected.present | hit
-        selected.map_base = selected.map_base | base
-        selected.map_address = selected.map_address | address
-        selected.glyph_base = selected.glyph_base | first
-        selected.glyph_count = selected.glyph_count | count
-        selected.overlay = selected.overlay | overlay
-    return saved
+        # V2 prefixes are unique. Register two parallel reductions so a page
+        # comparison need not route through all eight entries before the cut.
+        # Combining the old groups below preserves the one-clock interface.
+        if page < (MAX_PAGES // 2):
+            lower.present = lower.present | hit
+            lower.map_base = lower.map_base | base
+            lower.map_address = lower.map_address | address
+            lower.glyph_base = lower.glyph_base | first
+            lower.glyph_count = lower.glyph_count | count
+            lower.overlay = lower.overlay | overlay
+        else:
+            upper.present = upper.present | hit
+            upper.map_base = upper.map_base | base
+            upper.map_address = upper.map_address | address
+            upper.glyph_base = upper.glyph_base | first
+            upper.glyph_count = upper.glyph_count | count
+            upper.overlay = upper.overlay | overlay
+    return font_v2_page_t(codepoint=saved_lower.codepoint,
+        present=saved_lower.present | saved_upper.present,
+        map_base=saved_lower.map_base | saved_upper.map_base,
+        map_address=saved_lower.map_address | saved_upper.map_address,
+        glyph_base=saved_lower.glyph_base | saved_upper.glyph_base,
+        glyph_count=saved_lower.glyph_count | saved_upper.glyph_count,
+        overlay=saved_lower.overlay | saved_upper.overlay)

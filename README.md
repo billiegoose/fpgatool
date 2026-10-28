@@ -96,7 +96,10 @@ That hook knows its own storage layout: the mailbox does not send an asset type,
 address or length. A compatible resident bridge is required. The board profile
 selects the cable/FPGA transport; the current implementation supports Digilent
 Artix-7 with a six-bit JTAG instruction register. See the
-[resident protocol](docs/live-flash.md) when adding it to another design.
+[resident protocol and hardware integration guide](docs/live-flash.md) when adding
+it to another design. The reusable `fpgatool_board.basys3.live_flash.service()`
+bundles the bridge, ownership handshake, and QSPI pin routing; each application
+supplies its own data loader and activation policy.
 Normal builds keep the underlying Nix/PipelineC/programmer output quiet and save it
 as `build.log`, `load.log`, or `program.log` beside the design output. Pass
 `--verbose` (or `-v`) to stream the full tool output directly to the terminal.

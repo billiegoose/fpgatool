@@ -100,9 +100,13 @@ begin
     sel(1) <= '1'; drck(1) <= '1'; wait for 5 ns;
     assert pins.cclk = 0 and pins.cs_n = 1 report "ungranted SPI drove flash" severity failure;
     drck(1) <= '0'; run(1) <= '1'; granted <= "1"; wait for 5 ns;
-    run(1) <= '0'; cap(1) <= '1'; drck(1) <= '1'; wait for 5 ns;
-    assert pins.cs_n = 0 and pins.cclk = 1 severity failure;
-    drck(1) <= '0'; cap(1) <= '0'; tdi(1) <= '1'; miso <= "0"; wait for 5 ns;
+    run(1) <= '0'; drck(1) <= '1'; wait for 1 ns;
+    cap(1) <= '1'; wait for 4 ns;
+    assert pins.cs_n = 1 and pins.cclk = 1 report "capture clock reached flash before CS setup" severity failure;
+    drck(1) <= '0'; wait for 5 ns;
+    assert pins.cs_n = 0 and pins.cclk = 0 report "delayed CAPTURE missed before SHIFT" severity failure;
+    cap(1) <= '0'; tdi(1) <= '1'; miso <= "0"; wait for 5 ns;
+    drck(1) <= '1'; wait for 5 ns;
     assert pins.dq0 = 1 and tdo(1) = '0' report "SPI MOSI/MISO" severity failure;
     miso <= "1"; wait for 5 ns;
     assert tdo(1) = '1' severity failure;

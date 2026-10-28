@@ -170,33 +170,30 @@ def consume_font_word(word: uint32_t, valid: uint1_t, io_error: uint1_t,
                           write_data=word)
 
 
-# Host USER2 commands. Zero is the idle command (status polling is read-only).
-LIVE_BEGIN = 1
-LIVE_COMMIT = 2
-LIVE_ABORT = 3
-
-
 @struct
 class font_v2_boot_t(NamedTuple):
     font: font_v2_load_t
     flash: QSPI.qspi_flash_byte_io_t
-    granted: uint1_t
     busy: uint1_t
-    generation: uint16_t
+    done: uint1_t
 
 
 @hw_func
 def load_font_from_qspi(dq: uint4_t, blank_start: uint1_t = 0,
                         blank_deadline: uint1_t = 0,
-                        command: uint2_t = 0) -> font_v2_boot_t:
+                        reload: uint1_t = 0,
+                        clear_error: uint1_t = 0) -> font_v2_boot_t:
+    """Load at boot or on a reload pulse; done marks successful publication.
+
+    Flash ownership and physical pin routing belong to the caller. This loader
+    starts no flash transfers while idle, so its idle state is quiescent.
+    """
     # INIT, QE wait, preflight start/read, wait-vblank, copy start/read,
-    # publish, idle, host-owned. Preflight changes neither BRAM nor active config.
+    # publish, idle. Preflight changes neither BRAM nor active config.
     phase: Reg[uint4_t] = 0
     active_config: Reg[font_v2_config_t]
     active_ready: Reg[uint1_t] = 0
     update_error: Reg[uint1_t] = 0
-    granted: Reg[uint1_t] = 0
-    generation: Reg[uint16_t] = 0
     runtime_copy: Reg[uint1_t] = 0
     assembled: Reg[uint32_t] = 0
     byte_index: Reg[uint2_t] = 0
@@ -206,8 +203,6 @@ def load_font_from_qspi(dq: uint4_t, blank_start: uint1_t = 0,
     saved_config: font_v2_config_t = active_config
     saved_ready: uint1_t = active_ready
     saved_error: uint1_t = update_error
-    saved_granted: uint1_t = granted
-    saved_generation: uint16_t = generation
     parser_reset: uint1_t = (cycle_phase == 2) | (cycle_phase == 5)
     parsed = consume_font_word(word, word_valid, uint1_t(0), parser_reset)
     word_valid = 0
@@ -266,20 +261,12 @@ def load_font_from_qspi(dq: uint4_t, blank_start: uint1_t = 0,
         active_config = parsed.config
         active_ready = 1
         update_error = 0
-        generation = generation + 1
         phase = 8
     elif cycle_phase == 8:
-        if command == LIVE_BEGIN:
-            granted = 1
-            update_error = 0
-            phase = 9
-    elif cycle_phase == 9:
-        if command == LIVE_COMMIT:
-            granted = 0
+        if reload:
             phase = 0
-        elif command == LIVE_ABORT:
-            granted = 0
-            phase = 8
+    if clear_error:
+        update_error = 0
     flash = burst.pins
     if cycle_phase <= 1:
         flash = initialization
@@ -287,5 +274,5 @@ def load_font_from_qspi(dq: uint4_t, blank_start: uint1_t = 0,
     font = font_v2_load_t(config=saved_config, ready=saved_ready, error=saved_error,
         write_enable=write_enable, write_address=parsed.write_address,
         write_data=parsed.write_data)
-    return font_v2_boot_t(font=font, flash=flash, granted=saved_granted,
-                          busy=uint1_t(cycle_phase != 8), generation=saved_generation)
+    return font_v2_boot_t(font=font, flash=flash,
+                          busy=uint1_t(cycle_phase != 8), done=uint1_t(cycle_phase == 7))

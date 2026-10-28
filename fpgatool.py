@@ -44,11 +44,20 @@ def run(
 ) -> subprocess.CompletedProcess:
     if VERBOSE:
         print("+ " + shlex.join(str(x) for x in cmd), flush=True)
-        return subprocess.run(cmd, check=check, cwd=cwd)
     if log_path is None:
         return subprocess.run(cmd, check=check, cwd=cwd)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w") as log:
+        if VERBOSE:
+            with subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True) as process:
+                for line in process.stdout:
+                    log.write(line)
+                    print(line, end="", flush=True)
+                result = subprocess.CompletedProcess(cmd, process.wait())
+            if check:
+                result.check_returncode()
+            return result
         return subprocess.run(
             cmd,
             check=check,
@@ -56,6 +65,23 @@ def run(
             stdout=log,
             stderr=subprocess.STDOUT,
         )
+
+
+def run_data_programmer(cmd: list[str], *, log_path: Path) -> None:
+    """Require completed readback verification, including on a zero exit code.
+
+    openFPGALoader can print an SPI failure and still return success. Reject
+    that before requesting application activation or reporting verified data.
+    """
+    run(cmd, log_path=log_path)
+    transcript = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", log_path.read_text(errors="replace"))
+    error = re.search(r"(?im)^[^\n]*\b(?:error|fail|failed|failure)\b[^\n]*", transcript)
+    if error:
+        raise FPGAToolError(f"data programming failed: {error.group().strip()}; see {log_path}")
+    verified = re.search(r"Verifying write\b.*?Reading\s*:\s*\[[^\]]*\]\s*100(?:\.0+)?%",
+                         transcript, re.DOTALL | re.IGNORECASE)
+    if not verified:
+        raise FPGAToolError(f"programmer did not complete readback verification; see {log_path}")
 
 
 def output(cmd: list[str], *, cwd: Path | None = None) -> str:
@@ -469,11 +495,11 @@ def cmd_program_data(args: argparse.Namespace) -> None:
         if live:
             from programming.live_flash import program_live_data
             serial = args.ftdi_serial
-            program_live_data(binary, lambda port: run(openfpgaloader_data_command(
+            program_live_data(binary, lambda port: run_data_programmer(openfpgaloader_data_command(
                 board, binary, offset, live=True, xvc_port=port), log_path=log), serial=serial,
                 reload=reload, reload_timeout=getattr(args, 'reload_timeout', 3))
         else:
-            run(openfpgaloader_data_command(board, binary, offset,
+            run_data_programmer(openfpgaloader_data_command(board, binary, offset,
                 serial=getattr(args, "ftdi_serial", None)), log_path=log)
     except subprocess.CalledProcessError as exc:
         raise FPGAToolError(f"data programming failed; see {log}") from exc

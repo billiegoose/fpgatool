@@ -215,8 +215,10 @@ crop and kerning of `g+1`, and Unicode mapping of `g+2`:
 | 4 / 6 | Hold metadata(g+2) | Hold row ID(g+1) | Row ID/pending packet(g+1), previous step/older-origin candidate(g+1), metadata and crop-address register(g+2) |
 
 Unicode page selection computes each candidate map address in parallel and
-registers the complete selected address on the codepoint prefetch path. Matching
-unique prefixes are reduced in parallel, without a priority chain. Bootstrap waits one additional clock for this cut;
+registers two groups of four directory entries on the codepoint prefetch path.
+Combining their previous-cycle outputs keeps the same one-clock selected-address
+interface while shortening the reduction before each register. Matching unique
+prefixes are reduced without a priority chain. Bootstrap waits one additional clock for this cut;
 the steady initiation interval stays at five clocks. The metadata page base
 (`metadata_base + glyph_base`) is registered when the map read launches. The
 map response only selects and registers its byte. The next phase computes the
@@ -235,6 +237,10 @@ addresses in states 4 and 5, so mailbox publication cannot forward a history
 update into address arithmetic. Undefined printable codepoints advance history
 using `.notdef`. The selected crop and prepared row retain their two explicit
 row-arithmetic cuts.
+
+The older/previous origin comparison is registered during the spare cycle
+before publication. Both candidates are already stable then, so publication
+selects with that saved comparison and keeps its existing cycle and pixel positions.
 
 State 5 waits for mailbox space while the map and older-kerning requests,
 saved pattern, crop, and metadata stay stable. The row helper may repeatedly capture the same
@@ -260,7 +266,7 @@ end/prefetch positions. The existing compositor, row restart/drain behavior,
 binary-to-color conversion, and FIFO handshake are retained. Physical timing
 and board status for this revision are recorded below after validation.
 
-## Live-update validation (2026-10-27)
+## Original live-update validation (2026-10-27)
 
 The selected pin-constrained route passes **148.68 MHz** against the 148.5 MHz
 target, using the isolated corrected timing database and **placement seed 2**.
@@ -276,8 +282,8 @@ validation and replacement would need to occur while scanout is paused, or use
 a validation-only preflight that does not overwrite those registers. Recheck
 vblank timing, failed-upload recovery, and final pixel placement before making
 that tradeoff. The current implementation deliberately retains the snapshot.
-The font build helper defaults to seed 2 and validates its corresponding report;
-the timing parser also handles nextpnr's aligned multi-clock report columns.
+The build helper validates the report for its selected seed; the timing parser
+also handles nextpnr's aligned multi-clock report columns.
 
 The checked artifact is `build/font-v2-live.bit`, its report is
 `build/font-v2-live-timing.log`, and source hashes are in `build/font-v2-live.json`.
@@ -285,7 +291,30 @@ It was generated from the as-written final netlist, retaining fixed RAM latency,
 with the existing Basys 3 QSPI pull-up workaround. As in the boot-loader route,
 the preliminary throughput sweep was bypassed for this direct final build.
 This is a modeled timing pass with very little margin, not vendor timing signoff.
-The new live-update hardware has not been flashed or physically tested.
+These measurements describe the original inline live-update implementation.
+
+### Reusable service validation (2026-10-27)
+
+The demo now uses `fpgatool_board.basys3.live_flash.service()` for resident JTAG,
+QSPI routing, ownership, and reload acknowledgement. The font loader retains
+format validation and vblank activation. See the [integration guide](live-flash.md#adding-the-hardware-to-a-demo)
+for the application handshake and use in other demos.
+
+The extracted design passes final routing at **159.34 MHz** against the same
+148.5 MHz target, with corrected timing data and **placement seed 4**. The build
+helper now defaults to seed 4. Packed resources are **3,453 LUT sites** and
+**2,471 flip-flops**, versus 3,408 and 2,440 for the inline version; BRAM counts
+are unchanged. The report and bitstream are under
+`build/basys3/vga_uart_1920_1080_font_v2_live_origin_cut/pipelinec/top/seed4/`.
+The corrected bitstream was loaded onto Basys 3 and tested with an actual live
+font upload: 88 glyphs, two pattern banks, 3,472 payload bytes. USER1 readback
+matched all 4,256 file bytes before and after programming. The exact
+`generate_font.py --export v2` / `program-data --live --reload` workflow advanced
+generation 1 to 2, retaining READY with busy/grant/error clear. The bridge samples
+CAPTURE on falling DRCK to avoid a placement-dependent chip-select race; the
+programmer now requires completed readback verification before requesting reload.
+The as-written final netlist was routed directly after
+the initial throughput sweep; no automatic pipeline stages were added.
 
 Wire-level native simulation checks 0x6B command/address/dummy clocks, quad-pad
 turnaround, byte ordering, complete 4,256-byte bursts within the blanking budget,

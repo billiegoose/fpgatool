@@ -14,7 +14,9 @@ except ImportError:
     p = None
 else:
     from hardware import QSPI
-    from hardware.font_v2_loader import load_font_from_qspi, LIVE_BEGIN, LIVE_COMMIT, LIVE_ABORT
+    from hardware.font_v2_loader import load_font_from_qspi
+    from hardware.live_flash import live_flash_control, live_flash_application_t
+    from hardware.live_flash_protocol import BEGIN, RELOAD, RELEASE
     from hardware.qspi_burst import read_burst, qspi_burst_t
 
 
@@ -38,6 +40,8 @@ class LiveReloadTests(unittest.TestCase):
         self.starts = 0
         self.writes = []
         self.ticks = 0
+        self.reload_request = 0
+        self.clear_error = 0
         owner = self
 
         def pins(**overrides):
@@ -92,7 +96,16 @@ class LiveReloadTests(unittest.TestCase):
 
     def tick(self, start=0, deadline=0, command=0):
         self.ticks += 1
-        out = p.sim_call(load_font_from_qspi, 0, start, deadline, command)
+        boot = p.sim_call(load_font_from_qspi, 0, start, deadline,
+                          self.reload_request, self.clear_error)
+        control = p.sim_call(live_flash_control, command, live_flash_application_t(
+            ready=boot.font.ready, busy=boot.busy, quiescent=int(not boot.busy),
+            done=boot.done, error=boot.font.error))
+        self.reload_request = int(control.reload)
+        self.clear_error = int(control.clear_error)
+        out = SimpleNamespace(font=boot.font, flash=boot.flash,
+                              granted=control.granted, busy=control.busy,
+                              generation=control.generation)
         if out.font.write_enable:
             self.assertFalse(out.font.ready, 'BRAM read/write ownership overlap')
             self.writes.append((int(out.font.write_address), int(out.font.write_data)))
@@ -112,11 +125,11 @@ class LiveReloadTests(unittest.TestCase):
         self.assertEqual(out.font.config.spacing, reference.SPACING)
         self.writes.clear()
 
-    def begin(self):
-        self.tick(command=LIVE_BEGIN)
-        out = self.tick()
+    def begin(self, ready=True):
+        self.tick(command=BEGIN)
+        out = self.until(lambda o: o.granted)
         self.assertTrue(out.granted)
-        self.assertTrue(out.font.ready)
+        self.assertEqual(bool(out.font.ready), ready)
 
     def test_verified_copy_waits_for_blank_and_commits_config_together(self):
         self.boot()
@@ -125,7 +138,7 @@ class LiveReloadTests(unittest.TestCase):
         for _ in range(100):
             self.assertTrue(self.tick().font.ready)
         self.assertFalse(self.writes)
-        self.tick(command=LIVE_COMMIT)
+        self.tick(command=RELOAD)
         self.until(lambda o: self.starts == 3)
         for _ in range(4400):
             out = self.tick()
@@ -145,7 +158,7 @@ class LiveReloadTests(unittest.TestCase):
         self.boot()
         self.begin()
         self.data = image(9, corrupt=True)
-        self.tick(command=LIVE_COMMIT)
+        self.tick(command=RELOAD)
         out = self.until(lambda o: o.font.error and not o.busy)
         self.assertTrue(out.font.ready)
         self.assertEqual(out.font.config.spacing, reference.SPACING)
@@ -159,7 +172,7 @@ class LiveReloadTests(unittest.TestCase):
         self.boot()
         self.begin()
         self.data = image(9)
-        self.tick(command=LIVE_COMMIT)
+        self.tick(command=RELOAD)
         self.until(lambda o: self.starts == 3)
         for _ in range(4400):
             self.tick()
@@ -175,8 +188,8 @@ class LiveReloadTests(unittest.TestCase):
         for _ in range(500):
             self.assertFalse(self.tick().font.ready)
         self.assertEqual(len(self.writes), count)
-        self.tick(command=LIVE_BEGIN)
-        self.tick(command=LIVE_COMMIT)
+        self.begin(ready=False)
+        self.tick(command=RELOAD)
         out = self.until(lambda o: o.font.ready and not o.busy)
         self.assertFalse(out.font.error)
         self.assertEqual(out.font.config.spacing, 9)
@@ -185,7 +198,7 @@ class LiveReloadTests(unittest.TestCase):
         self.boot()
         self.begin()
         self.data = image(9)
-        self.tick(command=LIVE_ABORT)
+        self.tick(command=RELEASE)
         out = self.tick()
         self.assertFalse(out.granted)
         self.assertFalse(out.busy)

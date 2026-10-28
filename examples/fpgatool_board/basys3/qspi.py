@@ -118,9 +118,10 @@ def _rewrite_pad(text: str, pad: str) -> str:
     text = tristate_decl.sub("", text, count=1)
 
     readback = re.compile(
-        rf"(?m)^(?P<lhs>\s*global_to_module\.[^.]+\.{re.escape(sample)})\s*<=\s*{re.escape(sample)};\s*$"
+        rf"(?m)^(?P<lhs>\s*global_to_module(?:\.[A-Za-z_][A-Za-z0-9_]*)+\.{re.escape(sample)})\s*<=\s*{re.escape(sample)};\s*$"
     )
-    text, n_read = readback.subn(rf"\g<lhs> <= {pad};", text, count=1)
+    # A pad may feed several readers, including nested reusable modules.
+    text = readback.sub(rf"\g<lhs> <= {pad};", text)
 
     output_drive = re.compile(
         rf"(?m)^\s*{re.escape(output)}\s*<=\s*(?P<value>module_to_global\.[^;]+);\s*$"
@@ -142,10 +143,9 @@ def _rewrite_pad(text: str, pad: str) -> str:
         "else (others => 'Z');"
     )
     text, n_drive = tristate_drive.subn(physical_drive, text, count=1)
-    if n_read > 1 or n_drive != 1:
+    if n_drive != 1:
         raise RuntimeError(
-            f"Basys 3 QSPI final-top rewrite expected zero/one read and one write for {pad}, "
-            f"got read={n_read} drive={n_drive}"
+            f"Basys 3 QSPI final-top rewrite expected one write for {pad}, got {n_drive}"
         )
     return text
 

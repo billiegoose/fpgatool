@@ -3,6 +3,7 @@ import contextlib
 import io
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 from unittest.mock import Mock, patch
 
@@ -94,6 +95,39 @@ class GeneralLiveTests(unittest.TestCase):
                               reload=True, mailbox_factory=self.mailbox, relay_factory=self.relay)
         self.assertEqual(self.events, [BEGIN, RELEASE])
 
+    def test_zero_exit_programmer_error_releases_without_reload(self):
+        log = Path(self.tmp.name) / 'program.log'
+        command = [sys.executable, '-c',
+                   "print('Jedec ID : ff'); print('Error: block protection is set')"]
+        for verbose in (False, True):
+            with self.subTest(verbose=verbose):
+                self.events.clear()
+                with patch.object(fpgatool, 'VERBOSE', verbose), contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(fpgatool.FPGAToolError, 'block protection'):
+                        program_live_data(self.binary,
+                            lambda port: fpgatool.run_data_programmer(command, log_path=log),
+                            reload=True, mailbox_factory=self.mailbox, relay_factory=self.relay)
+                self.assertEqual(self.events, [BEGIN, RELEASE])
+                self.assertEqual(self.status >> 16, 7)
+                self.assertIn('Error: block protection', log.read_text())
+
+    def test_programmer_must_finish_readback_verification(self):
+        log = Path(self.tmp.name) / 'program.log'
+        for transcript, success in (
+            ('Writing: [====] 100.00%\nDone\n', False),
+            ('Verifying write (May take time)\nReading: [=   ] 25.00%\n', False),
+            ('Verifying write (May take time)\nReading: [====] 100.00%\n', True),
+            ('Verifying write\nReading: [====] 100.00%\nVerification failed at 2228224\n', False),
+            ('Verifying write\nReading: [====] 100.00%\n\x1b[31mSPIFlash Error: failed to disable write\x1b[0m\n', False),
+        ):
+            with self.subTest(transcript=transcript):
+                command = [sys.executable, '-c', f'print({transcript!r})']
+                if success:
+                    fpgatool.run_data_programmer(command, log_path=log)
+                else:
+                    with self.assertRaises(fpgatool.FPGAToolError):
+                        fpgatool.run_data_programmer(command, log_path=log)
+
     def test_empty_file_is_rejected_before_usb_access(self):
         self.binary.write_bytes(b'')
         mailbox = Mock()
@@ -123,7 +157,7 @@ class GeneralLiveTests(unittest.TestCase):
                 program(12345)
             with patch('programming.live_flash.program_live_data', side_effect=upload), \
                  patch.object(fpgatool, 'require_tool', return_value='loader'), \
-                 patch.object(fpgatool, 'run') as run, contextlib.redirect_stdout(output):
+                 patch.object(fpgatool, 'run_data_programmer') as run, contextlib.redirect_stdout(output):
                 fpgatool.cmd_program_data(args)
             cmd = run.call_args.args[0]
             self.assertEqual(cmd[cmd.index('--offset')+1], str(0x300000))

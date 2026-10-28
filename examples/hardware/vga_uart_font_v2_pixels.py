@@ -115,6 +115,11 @@ def uart_text_scanout(rx: uint1_t, config: font_v2_config_t, font_ready: uint1_t
     step_older: Reg[int7_t] = 0
     candidate_previous: Reg[int13_t] = MARGIN_X
     candidate_older: Reg[int13_t] = MARGIN_X
+    prefer_older: Reg[uint1_t] = 0
+    saved_prefer_older: uint1_t = prefer_older
+    # Both candidates are stable by phase 4, before publication in phase 5.
+    # Keep this comparison off publication's history-count/selection path.
+    prefer_older = candidate_older > candidate_previous
     codepoint: Reg[uint24_t] = 0
     prefetch_ready: Reg[uint2_t] = 0
     load_state: Reg[uint3_t] = 0  # idle, warmup, launch, and five overlapped read phases
@@ -408,7 +413,7 @@ def uart_text_scanout(rx: uint1_t, config: font_v2_config_t, font_ready: uint1_t
             origin: int13_t = MARGIN_X
             if history_count != 0:
                 origin = candidate_previous
-            if (history_count == 2) & (candidate_older > origin):
+            if (history_count == 2) & saved_prefer_older:
                 origin = candidate_older
             bits: uint21_t = 0
             if pending_ink:

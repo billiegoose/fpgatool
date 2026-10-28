@@ -236,7 +236,6 @@ class FPGAToolTests(unittest.TestCase):
         self.assertIn("@final(syn=True)", qspi)
         self.assertIn("_bind_basys3_qspi_pads", qspi)
         self.assertIn("when {enable} = unsigned'(0 => '0')", qspi)
-        self.assertIn("if n_read > 1 or n_drive != 1", qspi)
         pins = (ROOT / "boards" / "basys3" / "pins.xdc").read_text()
         self.assertIn("LOC D18 [get_ports QspiDQ0]", pins)
         self.assertIn("LOC D19 [get_ports QspiDQ1]", pins)
@@ -597,7 +596,7 @@ class FPGAToolTests(unittest.TestCase):
                          reload=False, ftdi_serial=None)
         with mock.patch.object(fpgatool, "validate_data_flash_write", return_value=(0x220000, 4, 0x10000)) as validate_mock, mock.patch.object(
             fpgatool, "openfpgaloader_data_command", return_value=["loader"]
-        ), mock.patch.object(fpgatool, "run"):
+        ), mock.patch.object(fpgatool, "run_data_programmer"):
             fpgatool.cmd_program_data(args)
         self.assertEqual(validate_mock.call_args.args[1], external.resolve())
 

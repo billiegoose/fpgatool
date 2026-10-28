@@ -36,7 +36,10 @@ process(drck, runtest, granted)
 begin
   if runtest = '1' or granted(0) = '0' then
     cs <= '1';
-  elsif rising_edge(drck) then
+  -- BSCAN CAPTURE/SEL change around DRCK's rising edge. Sample after half
+  -- a clock so CS is low before the first SHIFT rising edge, independent
+  -- of placement delays between those controls and the buffered DRCK.
+  elsif falling_edge(drck) then
     if capture = '1' and sel = '1' then cs <= '0'; end if;
   end if;
 end process;
