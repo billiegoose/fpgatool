@@ -8,6 +8,7 @@ stays on the host so USB/JTAG passthrough is not part of the build environment.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -15,6 +16,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 
 ROOT = Path(__file__).resolve().parent
@@ -552,6 +554,46 @@ def positive_int(value: str) -> int:
     return n
 
 
+def prepare_native_runtime(pipelinec: Path) -> Path:
+    """Prepare the same patched runtime for native simulation and development."""
+    modules = ("pypeline.py", "PY_TO_LOGIC.py", "OPEN_TOOLS.py", "pypeline_sim.py",
+               "AUTO_PIPELINE.py")
+    patches = (
+        "pypeline-native-clock-wires.patch",
+        "pypeline-sim-factory-annotations.patch",
+        "pypeline-boolop-instance-names.patch",
+        "pipelinec-timing-snapshot-memory.patch",
+    )
+    sources = [pipelinec / "src" / name for name in modules]
+    patch_files = [TOOLCHAIN_DIR / "patches" / name for name in patches]
+    digest = hashlib.sha256()
+    for path in sources + patch_files:
+        digest.update(path.name.encode())
+        digest.update(path.read_bytes())
+    fingerprint = digest.hexdigest()
+    compat = STATE_DIR / "sim-runtime"
+    stamp = compat / "fingerprint"
+    if (stamp.is_file() and stamp.read_text() == fingerprint
+            and all((compat / "src" / name).is_file() for name in modules)):
+        return compat / "src"
+
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=STATE_DIR) as temp:
+        staging = Path(temp)
+        (staging / "src").mkdir()
+        for source in sources:
+            shutil.copy2(source, staging / "src" / source.name)
+        for patch in patch_files:
+            run([require_tool("patch"), "--batch", "--forward", "-p1", "-d", str(staging),
+                 "-i", str(patch)], log_path=staging / f"{patch.stem}.log")
+        # Drop old bytecode as well as sources when the toolchain or patches change.
+        if compat.exists():
+            shutil.rmtree(compat)
+        staging.rename(compat)
+    stamp.write_text(fingerprint)
+    return compat / "src"
+
+
 def cmd_sim(args: argparse.Namespace) -> None:
     source = normalize_source(args.source)
     if source.suffix.lower() != ".py":
@@ -565,18 +607,9 @@ def cmd_sim(args: argparse.Namespace) -> None:
         return
     if getattr(args, "uart_file", None):
         raise FPGAToolError("--uart-file requires the HDL simulation backend")
-    compat = STATE_DIR / "sim-runtime"
-    (compat / "src").mkdir(parents=True, exist_ok=True)
-    for name in ("pypeline.py", "PY_TO_LOGIC.py", "OPEN_TOOLS.py", "pypeline_sim.py"):
-        shutil.copy2(pipelinec / "src" / name, compat / "src" / name)
-    run([require_tool("patch"), "--batch", "--forward", "-p1", "-d", str(compat),
-         "-i", str(TOOLCHAIN_DIR / "patches" / "pypeline-native-clock-wires.patch")],
-        log_path=compat / "patch.log")
-    run([require_tool("patch"), "--batch", "--forward", "-p1", "-d", str(compat),
-         "-i", str(TOOLCHAIN_DIR / "patches" / "pypeline-sim-factory-annotations.patch")],
-        log_path=compat / "sim-patch.log")
+    compat = prepare_native_runtime(pipelinec)
     cmd = [sys.executable, str(ROOT / "simulation" / "run.py"), str(source),
-           "--pipelinec", str(pipelinec), "--compat", str(compat / "src"),
+           "--pipelinec", str(pipelinec), "--compat", str(compat),
            "--out", str(build_dir(args.board, source) / "sim"),
            "--frames", str(args.frames or 1)]
     if args.cycles:

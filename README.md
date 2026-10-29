@@ -13,6 +13,7 @@ Install the CLI once with `uv` (Python 3.12 or later) and a symlink on your `PAT
 
 ```sh
 uv venv --python 3.12 .venv
+.venv/bin/python scripts/setup-dev.py
 mkdir -p ~/bin
 ln -s "$(pwd)/fpgatool.sh" ~/bin/fpgatool
 ```
@@ -55,6 +56,36 @@ retained in the named volume `fpgatool-nix`, so later builds reuse it. If a clea
 sibling `../PipelineC` checkout is already at the exact pinned revision, fpgatool
 reuses it read-only instead of cloning a duplicate; otherwise it creates a managed
 checkout under `.fpgatool/cache/`.
+
+## Development environment and tests
+
+Run `.venv/bin/python scripts/setup-dev.py` after creating or recreating the
+virtual environment. It fetches the pinned PipelineC checkout if needed, prepares
+the compatibility patches, and registers the runtime in that virtual environment.
+Plain `.venv/bin/python` and IDEs using this interpreter can then import `pypeline`
+from any working directory without setting `PYTHONPATH` or activating a shell.
+Run setup again after changing the toolchain pin or patches; unchanged setup is
+cached. The pinned checkout itself stays read-only.
+
+Use the default test launcher for the complete Python suite:
+
+```sh
+./test.sh
+./test.sh discover -s tests -p 'test_mini_filesystem*.py' -v
+./test.sh discover -s tests -p 'test_live_jtag_vhdl.py' -v
+```
+
+The launcher refreshes the local runtime registration automatically, then runs
+tests in the pinned Podman/Nix simulation environment, which supplies Pypeline's
+compiler dependencies and GHDL. Missing runtime dependencies fail the launcher
+before test discovery. The first run may download Nix dependencies; later runs
+reuse `fpgatool-nix`. No FPGA is needed. Direct host `unittest` commands also find
+Pypeline after setup, but GHDL and compiler dependencies come from the test launcher.
+Native tests use the simulator's typed arithmetic mode for speed. To exercise
+the arithmetic operators' per-bit implementations as well, use
+`PYPELINE_SIM_SOFT_OPS=all ./test.sh`.
+The browser visualizer has a separate Node test suite:
+`node --test tools/filesystem-visualizer/filesystem.test.mjs`.
 
 Commands are deliberately literal:
 

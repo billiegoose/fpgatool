@@ -1,3 +1,13 @@
+# Development environment
+
+- Use `./test.sh` for Python tests. It prepares the patched Pypeline runtime and
+  runs in the pinned Podman/Nix simulation shell with GHDL and compiler dependencies.
+  It forwards unittest arguments, e.g.
+  `./test.sh discover -s tests -p 'test_mini_filesystem*.py' -v`.
+- To configure direct `.venv/bin/python` invocations or an IDE interpreter, run
+  `.venv/bin/python scripts/setup-dev.py`. Repeat after recreating `.venv` or
+  changing the toolchain pin or patches; no manual `PYTHONPATH` is required.
+
 # FPGA design guidance
 
 Apply these guidelines when creating or modifying FPGA designs, including RTL

@@ -156,6 +156,7 @@
               pkgs.yosys pkgs.ghdl pkgs.yosys-ghdl pkgs.gcc pkgs.patch
               (pkgs.python312.withPackages (p: [
                 p.pycparser p.pyyaml p.textx p.simplejson p.intervaltree p.distutils
+                p.pyftdi p.pillow
                 pyrtl
               ]))
             ];

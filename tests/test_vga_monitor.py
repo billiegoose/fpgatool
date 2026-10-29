@@ -1,5 +1,6 @@
 """Raster alignment, screenshot encoding, and native pin-output integration."""
 from dataclasses import dataclass, replace
+import importlib.util
 import json
 import http.client
 from pathlib import Path
@@ -118,8 +119,8 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(monitor.frames, 0)
 
 
-@unittest.skipUnless((ROOT / '.fpgatool/cache/PipelineC/src/pypeline.py').is_file(),
-                     'requires the pinned PipelineC runtime checkout')
+@unittest.skipUnless(importlib.util.find_spec('pypeline') is not None,
+                     'requires the configured Pypeline runtime')
 class NativeMonitorTests(unittest.TestCase):
     def run_design(self, clock_setup, main_clock, divider, ready='1'):
         pins = '\n'.join(f'    board.VGA_{color}{bit} = px.{color.lower()}[{bit}]'
