@@ -19,33 +19,107 @@ end component;
 
 
 _SPI_VHDL = _BSCAN + """
-signal capture, drck, runtest, sel, tdi, cs : std_logic := '0';
+signal capture, drck, tck, runtest, sel, shift, tdi, cs : std_logic := '0';
+signal mosi_captured, shift_seen : std_logic := '0';
+signal cap_meta, cap_sync, sel_meta, sel_sync, run_meta, run_sync : std_logic := '0';
 signal tdo : std_logic;
+-- Cross the slow JTAG signals into the 100 MHz application clock domain.
+-- MOSI is registered several cycles before its matching SPI rising edge.
+signal tck_meta, tck_sync, tck_d0, tck_d1, tck_d2 : std_logic := '0';
+signal tdi_meta, tdi_sync, mosi_reg : std_logic := '0';
+signal shift_meta, shift_sync, shifting : std_logic := '0';
+signal cs_meta, cs_sync : std_logic := '1';
+signal have_meta, have_sync : std_logic := '0';
+signal sck_reg : std_logic := '0';
+attribute ASYNC_REG : string;
+attribute ASYNC_REG of tck_meta, tck_sync, tdi_meta, tdi_sync, shift_meta, shift_sync, cs_meta, cs_sync, cap_meta, cap_sync, sel_meta, sel_sync, run_meta, run_sync, have_meta, have_sync : signal is "TRUE";
 begin
 bscan_spi : BSCANE2 generic map (JTAG_CHAIN => 1)
   port map (CAPTURE => capture, DRCK => drck, RESET => open, RUNTEST => runtest,
-            SEL => sel, SHIFT => open, TCK => open, TDI => tdi, TMS => open,
+            SEL => sel, SHIFT => shift, TCK => tck, TDI => tdi, TMS => open,
             UPDATE => open, TDO => tdo);
--- Explicit v1 version response. Newer openFPGALoader defaults to v1 on zero.
-bscan_version : BSCANE2 generic map (JTAG_CHAIN => 4)
-  port map (CAPTURE => open, DRCK => open, RESET => open, RUNTEST => open,
-            SEL => open, SHIFT => open, TCK => open, TDI => open, TMS => open,
-            UPDATE => open, TDO => '0');
+-- Only instantiate the functional USER1 and USER2 chains. The pinned
+-- Himbächel placer can allocate an unused USER4 instance ahead of them,
+-- displacing their physical BSCAN sites and breaking the JTAG mailbox.
 tdo <= miso(0) when sel = '1' else tdi;
+-- Capture MOSI on the USER1 DRCK rising edge. The delayed system-clock
+-- SPI rising edge follows this capture, preserving the first command bit.
 process(drck, runtest, granted)
 begin
   if runtest = '1' or granted(0) = '0' then
-    cs <= '1';
-  -- BSCAN CAPTURE/SEL change around DRCK's rising edge. Sample after half
-  -- a clock so CS is low before the first SHIFT rising edge, independent
-  -- of placement delays between those controls and the buffered DRCK.
-  elsif falling_edge(drck) then
-    if capture = '1' and sel = '1' then cs <= '0'; end if;
+    mosi_captured <= '0';
+    shift_seen <= '0';
+  elsif rising_edge(drck) then
+    if sel = '1' and shift = '1' then
+      mosi_captured <= tdi;
+      shift_seen <= '1';
+    end if;
   end if;
 end process;
-return_output.cclk(0) <= drck and granted(0);
-return_output.cs_n(0) <= cs or not granted(0);
-return_output.dq0(0) <= tdi;
+-- A full CAPTURE-DR phase precedes SHIFT-DR. Synchronize that phase and
+-- assert CS while SCK is still held low, instead of relying on an
+-- asynchronous falling-DRCK event whose placement relative to CAPTURE varies.
+process(clk)
+begin
+  if rising_edge(clk) then
+    cap_meta <= capture;
+    cap_sync <= cap_meta;
+    sel_meta <= sel;
+    sel_sync <= sel_meta;
+    run_meta <= runtest;
+    run_sync <= run_meta;
+    if granted(0) = '0' or run_sync = '1' then
+      cs <= '1';
+    elsif cap_sync = '1' and sel_sync = '1' then
+      cs <= '0';
+    end if;
+  end if;
+end process;
+-- Do not use raw BSCAN DRCK as a physical SPI clock. Its route to STARTUPE2
+-- can otherwise race the independent TDI-to-IOBUF route. At 3 MHz JTAG,
+-- six 100 MHz cycles of clock latency leave generous room inside each bit.
+process(clk)
+begin
+  if rising_edge(clk) then
+    -- SPI SCK is system-clock registered; MOSI is DRCK captured.
+    -- BSCAN TCK is sampled strictly as asynchronous data.
+    tck_meta <= tck;
+    tck_sync <= tck_meta;
+    tck_d0 <= tck_sync;
+    tck_d1 <= tck_d0;
+    tck_d2 <= tck_d1;
+    tdi_meta <= tdi;
+    tdi_sync <= tdi_meta;
+    mosi_reg <= tdi_sync;
+    shift_meta <= shift;
+    shift_sync <= shift_meta;
+    cs_meta <= cs;
+    cs_sync <= cs_meta;
+      have_meta <= shift_seen;
+      have_sync <= have_meta;
+    -- Latch the start of SHIFT_DR rather than qualifying every bit with the
+    -- asynchronous SHIFT signal. This retains the final SPI clock pulse.
+    if granted(0) = '0' or run_sync = '1' then
+      shifting <= '0';
+    elsif shift_sync = '1' then
+      shifting <= '1';
+    elsif tck_d2 = '0' then
+      -- SHIFT may fall on the last JTAG rising edge; allow its delayed SPI
+      -- clock to finish high and return low before ending the transaction.
+      shifting <= '0';
+    end if;
+    -- Capture-DR does not generate an SPI clock. CS and MOSI have already
+    -- settled before the first delayed SHIFT_DR rising edge.
+    if granted(0) = '1' and shifting = '1' and cs_sync = '0' and have_sync = '1' then
+      sck_reg <= tck_d2;
+    else
+      sck_reg <= '0';
+    end if;
+  end if;
+end process;
+return_output.cclk(0) <= sck_reg;
+return_output.cs_n(0) <= cs_sync or not granted(0);
+return_output.dq0(0) <= mosi_captured;
 return_output.dq0_t(0) <= '0';
 return_output.dq1(0) <= '1';
 return_output.dq1_t(0) <= '1';
@@ -85,9 +159,17 @@ signal data : std_logic_vector(63 downto 0) := (others => '0');
 signal count : integer range 0 to 64 := 0;
 signal mailbox : unsigned(1 downto 0) := (others => '0');
 signal request, request_meta, request_sync, seen : std_logic := '0';
+-- USER2 application-to-DRCK status CDC: two-phase toggle handshake.
+-- The payload is held in the 100 MHz domain until the next accepted request;
+-- the DRCK domain copies it only after two ack synchronizer stages.
+signal status_hold, status_jtag : std_logic_vector(31 downto 0) := (others => '0');
+signal status_request, status_request_meta, status_request_sync,
+       status_request_seen, status_ack, status_ack_meta, status_ack_sync,
+       status_ack_seen : std_logic := '0';
 signal command : unsigned(1 downto 0) := (others => '0');
 attribute ASYNC_REG : string;
-attribute ASYNC_REG of request_meta, request_sync : signal is "TRUE";
+attribute ASYNC_REG of request_meta, request_sync, status_request_meta,
+                       status_request_sync, status_ack_meta, status_ack_sync : signal is "TRUE";
 begin
 bscan_control : BSCANE2 generic map (JTAG_CHAIN => 2)
   port map (CAPTURE => capture, DRCK => drck, RESET => open, RUNTEST => open,
@@ -96,9 +178,20 @@ bscan_control : BSCANE2 generic map (JTAG_CHAIN => 2)
 process(drck)
 begin
   if rising_edge(drck) then
+    status_ack_meta <= status_ack;
+    status_ack_sync <= status_ack_meta;
+    if status_ack_sync /= status_ack_seen then
+      -- Ack has crossed to DRCK; status_hold was frozen before the ack.
+      status_jtag <= status_hold;
+      status_ack_seen <= status_ack_sync;
+    end if;
     if capture = '1' and sel = '1' then
-      data <= std_logic_vector(status) & x"52464c32";
+      -- Capture the previous completed snapshot, never live status bits.
+      data <= status_jtag & x"52464c32";
       count <= 0;
+      if status_request = status_ack_sync then
+        status_request <= not status_request;
+      end if;
     elsif shift = '1' and sel = '1' then
       data <= tdi & data(63 downto 1);
       if count < 64 then count <= count + 1; end if;
@@ -119,6 +212,13 @@ end process;
 process(clk)
 begin
   if rising_edge(clk) then
+    status_request_meta <= status_request;
+    status_request_sync <= status_request_meta;
+    if status_request_sync /= status_request_seen then
+      status_hold <= std_logic_vector(status);
+      status_request_seen <= status_request_sync;
+      status_ack <= status_request_sync;
+    end if;
     request_meta <= request;
     request_sync <= request_meta;
     seen <= request_sync;

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#060200">
+  <title>Amber / Flash Atlas</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css?v=amber-buttons-3">
+  <script type="module" src="app.mjs?v=amber-buttons-3"></script>
+</head>
+<body>
+  <header class="topbar"><a class="wordmark" href="./">AMBER / OS</a><span class="tab">FLASH ATLAS</span><span class="system-status">BASYS 3 / MFS1</span><span class="status-dot" aria-hidden="true"></span></header>
+  <main>
+    <section class="intro">
+      <div><div class="eyebrow">QSPI FILESYSTEM / USER PARTITION</div><h1>Flash Atlas</h1><p>30 erasable sectors. Every file in its place.</p></div>
+      <div class="actions"><button id="demo-button"><span class="button-label">Load demo</span></button><label class="primary file-button" tabindex="0" role="button" for="dump-input"><span class="button-label">Open flash dump</span><input id="dump-input" type="file" accept=".bin,.dump,.img,application/octet-stream"></label></div>
+    </section>
+    <div id="error" class="error" role="alert" hidden></div>
+    <section class="overview" aria-label="Filesystem summary">
+      <div><span class="stat-label">SOURCE</span><strong id="source-name">No image loaded</strong><span id="source-kind">Open a dump or load the synthetic demo</span></div>
+      <div><span class="stat-label">CURRENT FILES</span><strong id="file-count">--</strong><span>Latest committed names</span></div>
+      <div><span class="stat-label">REFERENCED DATA</span><strong id="data-count">--</strong><span>Page footprint / 1,856 KiB</span></div>
+      <div><span class="stat-label">JOURNAL</span><strong id="journal-count">--</strong><span id="journal-detail">1,020 slots / 64 bytes each</span></div>
+    </section>
+    <section class="map-toolbar" aria-label="Map controls">
+      <div class="map-title"><h2>SECTOR MAP</h2><span>0x220000 — 0x3fffff</span></div>
+      <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Find a file or content ID" aria-label="Find a file or content ID"><span id="match-count"></span></label>
+    </section>
+    <div class="legend"><span><i class="swatch live"></i>Current</span><span><i class="swatch history"></i>History</span><span><i class="swatch orphan"></i>Unreferenced</span><span><i class="swatch empty"></i>Erased</span><span class="legend-note">64 KiB / sector · 256 B / page</span></div>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section id="sector-grid" class="sector-grid" aria-label="30 user-flash sectors"></section>
+  </main>
+  <aside id="inspector" class="inspector" role="dialog" aria-label="Index metadata" hidden><div class="inspector-top"><span id="inspector-kicker">INDEX METADATA</span><button id="close-inspector" aria-label="Close metadata"><span class="button-label">×</span></button></div><div id="inspector-content"></div></aside>
+  <div id="drop-overlay" hidden>DROP FLASH DUMP TO OPEN</div>
+</body>
+</html>

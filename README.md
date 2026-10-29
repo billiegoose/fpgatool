@@ -67,6 +67,7 @@ Commands are deliberately literal:
 ./fpgatool.sh program-data assets.bin --offset 0x230000
 ./fpgatool.sh program-data assets.bin --offset 0x230000 --live
 ./fpgatool.sh program-data font-v2.bin --live --reload
+./fpgatool.sh program-file notes.txt --name notes.txt
 ./fpgatool.sh doctor
 ./fpgatool.sh shell
 ```
@@ -76,6 +77,7 @@ Commands are deliberately literal:
 - `run`: build a design source, then load it into volatile SRAM
 - `program`: existing `.bit` -> persistent board flash
 - `program-data`: raw binary -> verified user-data area in configuration flash; defaults to `0x220000` on Basys 3. `--live` uses a resident JTAG flash bridge without resetting the FPGA. Add `--reload` to request the running design's data validation/activation hook.
+- `program-file`: append an immutable content-addressed blob with a mutable filename to the Basys 3 mini-filesystem through the resident JTAG bridge. The first `--format-filesystem` invocation **erases the entire user-data partition**; subsequent uploads append without erasing existing files. See [mini-filesystem setup, layout, and safety](docs/mini-filesystem.md).
 
 `program` intentionally requires an already-built `.bit` file so a persistent flash
 write is always an explicit operation. `doctor` and `shell` do not require a source.
@@ -580,6 +582,7 @@ The flash examples intentionally keep the application behavior parallel so the t
 - `examples/flash_dspi_read.py` — Dual Output Read (`0x3B`): command/address remain serial and payload data arrives two bits per clock. Program operations on this transport remain ordinary serial SPI, so there is no redundant `flash_dspi_write.py` demo.
 - `examples/flash_qspi_read.py` — Quad Output Read (`0x6B`), four payload bits per clock.
 - `examples/flash_qspi_write.py` — quad reads plus Quad Page Program (`0x32`).
+- `examples/mini_filesystem_demo.py` — UART `list` / `print NAME` shell over a named, content-addressed flash journal, with resident live JTAG uploads. See [mini-filesystem guide](docs/mini-filesystem.md).
 
 The three read demos consume the same raw text directly from the reserved flash sector. The first erased `0xFF` byte marks end-of-text; no image header or preprocessing utility is required. ASCII lower-case is rendered as upper-case on the seven-segment display, while tabs/newlines render as spaces.
 

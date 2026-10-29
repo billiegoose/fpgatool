@@ -27,3 +27,6 @@ size_bytes = 0x400000
 configuration_end_offset = 0x220000
 user_data_offset = 0x220000
 erase_block_bytes = 0x10000
+# Existing raw font and scene assets occupy 0x220000 and 0x230000.
+# Keep the MFS1 journal in its own erased 64 KiB sector.
+filesystem_index_offset = 0x240000

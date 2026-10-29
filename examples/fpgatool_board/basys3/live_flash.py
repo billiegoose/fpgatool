@@ -31,17 +31,42 @@ class live_flash_proxy_t(NamedTuple):
 def proxy(application_pins: qspi_flash_byte_io_t,
           application: live_flash_application_t, miso: uint1_t) -> live_flash_proxy_t:
     status: Reg[uint32_t] = 4
+    seen_cs: Reg[uint1_t] = 0
+    seen_clock: Reg[uint1_t] = 0
+    seen_mosi_zero: Reg[uint1_t] = 0
+    seen_mosi_one: Reg[uint1_t] = 0
+    seen_miso_zero: Reg[uint1_t] = 0
+    seen_miso_one: Reg[uint1_t] = 0
+    seen_application_cs: Reg[uint1_t] = 0
+    seen_application_clock: Reg[uint1_t] = 0
     command = jtag.live_command(status)
     # Both an application acknowledgement and idle physical pins are required.
     safe = live_flash_application_t(ready=application.ready, busy=application.busy,
         quiescent=application.quiescent & application_pins.cs_n & (~application_pins.cclk),
         done=application.done, error=application.error)
     control = live_flash_control(command, safe)
-    status = control.status
     pause = control.pause
     reload_request = control.reload
     clear_error = control.clear_error
     bridge = jtag.spi_bridge(miso, control.granted)
+    if control.granted:
+        if not bridge.cs_n:
+            seen_cs = 1
+            if bridge.cclk:
+                seen_clock = 1
+            if bridge.dq0:
+                seen_mosi_one = 1
+            else:
+                seen_mosi_zero = 1
+            if miso:
+                seen_miso_one = 1
+            else:
+                seen_miso_zero = 1
+        if not application_pins.cs_n:
+            seen_application_cs = 1
+        if application_pins.cclk:
+            seen_application_clock = 1
+    status = control.status | (uint32_t(seen_cs) << 4) | (uint32_t(seen_clock) << 5) | (uint32_t(seen_mosi_zero) << 6) | (uint32_t(seen_mosi_one) << 7) | (uint32_t(seen_miso_zero) << 8) | (uint32_t(seen_miso_one) << 9) | (uint32_t(seen_application_cs) << 10) | (uint32_t(seen_application_clock) << 11)
     flash = application_pins
     if control.granted:
         flash = bridge

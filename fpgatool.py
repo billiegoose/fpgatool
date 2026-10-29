@@ -509,6 +509,31 @@ def cmd_program_data(args: argparse.Namespace) -> None:
               '✓ Flash ownership released; FPGA kept running')
 
 
+def cmd_program_file(args: argparse.Namespace) -> None:
+    """Append a named content-addressed blob through the live QSPI/JTAG proxy."""
+    board = board_config(args.board)
+    if board.get('live_programming', {}).get('transport') != 'digilent-xc7-user2-v1':
+        raise FPGAToolError('board has no supported resident live-flash transport')
+    if args.offset is not None:
+        raise FPGAToolError('program-file allocates its own address; omit --offset')
+    source = Path(args.source).expanduser().resolve()
+    if not source.is_file():
+        raise FPGAToolError(f'file does not exist: {source}')
+    from programming.mini_filesystem import TYPE_NAMES, program_live_file
+    name = args.name if args.name is not None else source.name
+    print(f'Uploading {name!r} ({source.stat().st_size} bytes) to mini-filesystem...')
+    if args.format_filesystem:
+        print('Resetting only the filesystem index sector (existing blob data preserved)...')
+    entry, changed = program_live_file(
+        source, board=board, name=name, object_type=TYPE_NAMES[args.type],
+        format_filesystem=args.format_filesystem, serial=args.ftdi_serial,
+        reload_timeout=args.reload_timeout)
+    print(f"✓ {'Committed' if changed else 'Already current'} {name!r}: "
+          f'{entry.content_id.hex()} at 0x{entry.address:06x} ({entry.length} bytes)')
+    if changed or args.format_filesystem:
+        print('✓ Filesystem reload acknowledged; FPGA kept running')
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     source = normalize_source(args.source)
     if source.suffix.lower() == ".bit":
@@ -612,14 +637,19 @@ def parser() -> argparse.ArgumentParser:
         prog="fpgatool",
         description="Build or simulate FPGA designs, load volatile SRAM, or program persistent flash.",
     )
-    p.add_argument("command", nargs="?", choices=("build", "load", "run", "sim", "program", "program-data", "doctor", "shell"))
-    p.add_argument("source", nargs="?", help="design source, .bit file, or binary data file depending on command")
+    p.add_argument("command", nargs="?", choices=("build", "load", "run", "sim", "program", "program-data", "program-file", "doctor", "shell"))
+    p.add_argument("source", nargs="?", help="design source, .bit file, or data file depending on command")
     p.add_argument("--board", default=DEFAULT_BOARD, help=f"board profile (default: {DEFAULT_BOARD})")
     p.add_argument("--offset", type=parse_offset, default=None, help="flash byte offset for program-data (default: board user-data start)")
     p.add_argument("--live", action="store_true", help="program-data: use a resident JTAG flash bridge without FPGA reset")
     p.add_argument("--reload", action="store_true", help="program-data --live: request device-owned data validation/reload and wait for acknowledgement")
     p.add_argument("--reload-timeout", type=positive_int, default=3, metavar="SECONDS", help="maximum wait for --reload acknowledgement (default: 3 seconds)")
-    p.add_argument("--ftdi-serial", help="program-data: select the USB/JTAG adapter by FTDI serial number")
+    p.add_argument("--ftdi-serial", help="select the USB/JTAG adapter by FTDI serial number")
+    p.add_argument("--name", help="program-file: stored UTF-8 name (default: local basename; max 32 bytes)")
+    p.add_argument("--type", choices=("blob", "text", "font", "scene"), default="text",
+                   help="program-file: object type metadata (default: text)")
+    p.add_argument("--format-filesystem", action="store_true",
+                   help="program-file: reset the filesystem index only; preserve existing blob sectors")
     p.add_argument("--comb", action="store_true", help="disable PipelineC auto-pipelining and build the design as written")
     p.add_argument("-v", "--verbose", action="store_true", help="stream full toolchain output")
     p.add_argument("--frames", type=positive_int, default=None, help="sim: stop after N complete frames (default: continuous, or 1 with --no-open)")
@@ -641,17 +671,21 @@ def main() -> int:
         p.error('--live applies only to program-data')
     if args.reload and (args.command != 'program-data' or not args.live):
         p.error('--reload requires program-data --live')
-    if args.reload_timeout != 3 and not args.reload:
-        p.error('--reload-timeout requires --reload')
+    if args.reload_timeout != 3 and not args.reload and args.command != 'program-file':
+        p.error('--reload-timeout requires --reload or program-file')
+    if (args.name is not None or args.type != 'text' or args.format_filesystem) and args.command != 'program-file':
+        p.error('--name, --type, and --format-filesystem require program-file')
     VERBOSE = args.verbose
     if args.command is None:
         p.print_help()
         return 0
-    if args.command in {"build", "load", "run", "sim", "program", "program-data"} and args.source is None:
+    if args.command in {"build", "load", "run", "sim", "program", "program-data", "program-file"} and args.source is None:
         if args.command in {"load", "program"}:
             p.error(f"{args.command} requires a .bit file, e.g. build/basys3/blink/blink.bit")
         if args.command == "program-data":
             p.error("program-data requires a binary file")
+        if args.command == "program-file":
+            p.error("program-file requires a file")
         p.error(f"{args.command} requires a design source, e.g. examples/blink.py")
     if args.source is None:
         args.source = str(DEFAULT_SOURCE)
@@ -663,6 +697,7 @@ def main() -> int:
             "sim": cmd_sim,
             "program": cmd_program,
             "program-data": cmd_program_data,
+            "program-file": cmd_program_file,
             "doctor": cmd_doctor,
             "shell": cmd_shell,
         }[args.command](args)
