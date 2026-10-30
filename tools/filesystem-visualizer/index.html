@@ -6,16 +6,17 @@
   <meta name="theme-color" content="#060200">
   <title>Amber / Flash Atlas</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=amber-buttons-3">
-  <script type="module" src="app.mjs?v=amber-buttons-3"></script>
+  <link rel="stylesheet" href="style.css?v=live-capture-4">
+  <script type="module" src="app.mjs?v=live-capture-4"></script>
 </head>
 <body>
   <header class="topbar"><a class="wordmark" href="./">AMBER / OS</a><span class="tab">FLASH ATLAS</span><span class="system-status">BASYS 3 / MFS1</span><span class="status-dot" aria-hidden="true"></span></header>
   <main>
     <section class="intro">
       <div><div class="eyebrow">QSPI FILESYSTEM / USER PARTITION</div><h1>Flash Atlas</h1><p>30 erasable sectors. Every file in its place.</p></div>
-      <div class="actions"><button id="demo-button"><span class="button-label">Load demo</span></button><label class="primary file-button" tabindex="0" role="button" for="dump-input"><span class="button-label">Open flash dump</span><input id="dump-input" type="file" accept=".bin,.dump,.img,application/octet-stream"></label></div>
+      <div class="actions"><button id="demo-button"><span class="button-label">Load demo</span></button><label class="file-button" tabindex="0" role="button" for="dump-input"><span class="button-label">Open flash dump</span><input id="dump-input" type="file" accept=".bin,.dump,.img,application/octet-stream"></label><button id="read-flash" class="primary"><span class="button-label">Read flash</span></button></div>
     </section>
+    <div id="capture-status" class="capture-status" role="status" hidden></div>
     <div id="error" class="error" role="alert" hidden></div>
     <section class="overview" aria-label="Filesystem summary">
       <div><span class="stat-label">SOURCE</span><strong id="source-name">No image loaded</strong><span id="source-kind">Open a dump or load the synthetic demo</span></div>

@@ -5,6 +5,7 @@ const grid = $('sector-grid');
 const inspector = $('inspector');
 let model, anchor, request = 0;
 let demoSpec;
+let captureBusy = false;
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -25,6 +26,7 @@ function acceptImage(bytes, name, demo = false) {
   closeInspector(false);
   model = parsed;
   $('error').hidden = true;
+  $('capture-status').hidden = true;
   $('source-name').textContent = name;
   $('source-name').title = name;
   $('source-kind').textContent = demo ? 'SYNTHETIC DEMO / not a board capture' : `${bytesLabel(bytes.length)} / local dump`;
@@ -42,6 +44,7 @@ function acceptImage(bytes, name, demo = false) {
   renderMap();
 }
 async function loadDemo() {
+  if (captureBusy) return;
   const token = ++request;
   try {
     if (!demoSpec) {
@@ -53,13 +56,73 @@ async function loadDemo() {
   } catch (error) { if (token === request) reportError(error); }
 }
 async function openFile(file) {
-  if (!file) return;
+  if (!file || captureBusy) return;
   const token = ++request;
   try {
     if (![0x400000, 0x1e0000].includes(file.size)) throw new Error('Open a 4 MiB full-flash dump or a 1,966,080-byte user-partition dump.');
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (token === request) acceptImage(bytes, file.name);
   } catch (error) { if (token === request) reportError(error); }
+}
+
+async function captureRequest(path, options) {
+  const response = await fetch(path, {cache: 'no-store', ...options});
+  if (!response.headers.get('content-type')?.includes('application/json')) {
+    throw new Error('Read flash needs the local backend. Start .venv/bin/python tools/filesystem-visualizer/server.py');
+  }
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Flash capture request failed');
+  return result;
+}
+async function readFlash() {
+  if (captureBusy) return;
+  captureBusy = true;
+  const token = ++request;
+  $('error').hidden = true;
+  $('demo-button').disabled = true;
+  $('read-flash').disabled = true;
+  $('dump-input').disabled = true;
+  const picker = document.querySelector('.file-button');
+  picker.setAttribute('aria-disabled', 'true');
+  picker.tabIndex = -1;
+  const status = $('capture-status');
+  status.hidden = false;
+  status.replaceChildren(el('span', '', 'Connecting to the board…'));
+  const progress = el('progress');
+  progress.max = 1; progress.value = 0;
+  progress.setAttribute('aria-label', 'Flash capture progress');
+  const message = el('span');
+  try {
+    let job = await captureRequest('/api/dump', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+    while (job.state === 'reading') {
+      message.textContent = `Reading flash / ${bytesLabel(job.bytesRead)} of ${bytesLabel(job.totalBytes)} / ${Math.floor(job.bytesRead / job.totalBytes * 100)}%`;
+      progress.value = job.bytesRead / job.totalBytes;
+      status.replaceChildren(message, progress);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      job = await captureRequest(`/api/dump/${job.id}`);
+    }
+    if (job.state !== 'complete') throw new Error(job.error || 'Flash capture failed');
+    status.replaceChildren(el('span', '', 'Loading captured flash…'));
+    const response = await fetch(`/api/dump/${job.id}/image`, {cache: 'no-store'});
+    if (!response.ok) throw new Error('Could not load the completed flash capture');
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (token === request) {
+      acceptImage(bytes, job.fileName);
+      $('source-kind').textContent = `${bytesLabel(bytes.length)} / board capture`;
+      status.hidden = false;
+      status.replaceChildren(el('span', '', 'Flash capture complete / saved and loaded'));
+    }
+  } catch (error) {
+    status.hidden = true;
+    reportError(error);
+  } finally {
+    captureBusy = false;
+    $('demo-button').disabled = false;
+    $('read-flash').disabled = false;
+    $('dump-input').disabled = false;
+    picker.removeAttribute('aria-disabled');
+    picker.tabIndex = 0;
+  }
 }
 
 function usageMeter(sector) {
@@ -258,6 +321,7 @@ function showJournal(button, records, label, selected) {
 }
 
 $('demo-button').addEventListener('click', loadDemo);
+$('read-flash').addEventListener('click', readFlash);
 $('dump-input').addEventListener('change', e => { openFile(e.target.files[0]); e.target.value = ''; });
 document.querySelector('.file-button').addEventListener('keydown', e => { if (['Enter', ' '].includes(e.key)) { e.preventDefault(); $('dump-input').click(); } });
 $('search').addEventListener('input', applySearch);
