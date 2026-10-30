@@ -36,6 +36,18 @@ print hello.txt
 
 Uploaded file paths can be outside the checkout. The default stored name is the local basename (maximum 32 **UTF-8 bytes**). Supported metadata types are `blob`, `text`, `font`, and `scene`; `text` is the default. Names are compared byte-for-byte (case-sensitive). There is no directory hierarchy, delete command, or rename command yet. Empty files are allowed.
 
+The host reads the 64 KiB journal once per upload and reuses that snapshot to
+decide whether its header needs initialization. Erased holes can precede later
+records, so the scan continues beyond them. The live JTAG connection uses a
+1 ms FTDI USB latency timer instead of the 16 ms default. On the connected
+Basys 3, this reduced one journal scan from about 4.2 seconds to 0.9 seconds;
+removing a duplicate scan reduced changed-upload index overhead from about
+8.4 seconds to 0.9 seconds. An unchanged upload measured 1.24 seconds without
+writing flash or advancing the reload generation. Page-write verification,
+content-hash verification and commit ordering are retained. The user confirmed
+that changed font uploads are fast again. These are host-side changes; they do
+not require a new FPGA bitstream.
+
 ## Register existing flash objects
 
 The Basys 3 used for development already contains a RED2 font at `0x220000`, a legacy scene payload at `0x230000`, and `tiny_e_book.txt` at `0x3e0000`. Their full byte ranges and BLAKE2s-128 hashes were verified over USER1 JTAG without modifying flash. These objects can be **registered in place**: only the index sector receives new records; the original blob bytes are never copied or reprogrammed.
@@ -53,6 +65,41 @@ PYTHONPATH=. .venv/bin/python -m programming.import_legacy_flash --commit
 ```
 
 `--commit` verifies all three hashes before making any change, appends records with a final commit byte, and requests a live reload. Retries are idempotent. The scene is named `legacy-scene.bin` because its historical binary format has not been independently identified; its 37,590-byte length was inferred from the final programmed (non-`0xff`) byte. The four unrelated bytes at `0x3f0000` remain unmodified and unindexed.
+
+## Hardware file reader
+
+The reusable hardware reader is `hardware.mini_filesystem.make_file_reader(name)`.
+It initializes quad reads, validates the MFS1 header, scans all journal slots,
+and resolves the latest committed CRC-valid record with that exact UTF-8 name.
+Erased holes, torn entries and bad CRCs do not stop the scan. Deletion or
+supersession hides older entries for the same name. Blob references cannot
+overlap the index or extend outside their permitted region.
+
+Call the returned function each clock as
+`reader(dq, open_request, start, offset, length, abort)`. Open is a pulse; wait
+for `opened` with `busy` clear, or `error`. Metadata (`object_type`, `length`)
+belongs to the resolved immutable handle. A read-start pulse latches a byte
+offset and a length of 0–8191 bytes, checked against the file length. The output
+provides registered `data`/`valid` bytes and a `done` pulse, with no backpressure.
+Abort suppresses pending stream data and retains the handle. A new open discards
+the old handle, clears errors, and resolves the current journal again. The caller routes `flash`
+through the resident proxy and owns the physical pins. The selected QSPI bus
+crosses a one-clock output register; all pads and status fields stay aligned.
+Burst input sampling still occurs four clocks after the physical falling edge.
+Payload digests are not
+recomputed by this reader; format-specific validation stays with its consumer.
+The default reader includes QSPI initialization. After a caller has completed
+flash setup, quad-enable and STARTUPE2 clock priming,
+`make_file_reader(name, initialize_flash=False)` omits the
+shared initializer. `examples/font_v2_file_reader_probe.py` uses this mode to
+evaluate the new file-reader core at 170 MHz independently of the existing QSPI
+startup state machine; the normal font loader retains initialization.
+
+The font-v2 loader opens `RED2-Regular-v2.bin` (type `font`, 4,256 bytes) at boot
+and on the proxy's reload pulse. It reuses one resolved handle for preflight
+and the vertical-blank copy, so journal lookup cannot delay that copy. Upload
+with `program-file --name RED2-Regular-v2.bin --type font`; the existing indexed
+legacy font is also supported. No raw-address fallback is used.
 
 ## Version-one layout
 

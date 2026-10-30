@@ -13,7 +13,7 @@ import fpgatool_board.basys3.vga as board_vga
 import fpgatool_board.basys3.uart as board_uart
 import hardware.vga_uart_font_v2_pixels as renderer
 from hardware.font_v2.memory import make_font_v2_rom
-from hardware.font_v2.loader import load_font_from_qspi
+from hardware.font_v2.loader import load_font_from_file
 import fpgatool_board.basys3.qspi as board_qspi
 import fpgatool_board.basys3.live_flash as board_live_flash
 from hardware.live_flash import live_flash_application_t
@@ -81,7 +81,7 @@ def vga_uart_1920_1080_font_v2_demo():
                          board_qspi.QspiDQ1_I, board_qspi.QspiDQ0_I)
     blank_start: Reg[uint1_t] = 0
     blank_deadline: Reg[uint1_t] = 0
-    boot = load_font_from_qspi(dq, blank_start, blank_deadline,
+    boot = load_font_from_file(dq, blank_start, blank_deadline,
                                board_live_flash.reload_request, board_live_flash.clear_error)
     blank_start = renderer.font_blank_start
     blank_deadline = renderer.font_blank_deadline

@@ -13,7 +13,7 @@ or demo text buffer. It does not instantiate memories on import.
 | `row_address.py` | Registered crop/mirroring and row-address calculations |
 | `memory.py` | Factory for one dual-port 1024×32 BRAM |
 | `format.py` | Binary-format constants; also importable without Pypeline |
-| `loader.py` | Optional QSPI boot, validation and vertical-blank reload |
+| `loader.py` | Optional named-file boot, validation and vertical-blank reload |
 
 `hardware/vga_uart_font_v2_pixels.py` is the demo adapter. It owns UART decoding,
 text RAM, line wrapping, margins, the 64-bit overlap compositor, pixel FIFO,
@@ -87,11 +87,25 @@ logical feedback wire's reader and writer in distinct hardware functions (or
 actors); reading and then assigning that same wire in one function becomes an
 external readback input. The demo's `text_memory()` adapter shows this wiring.
 
-`hardware.font_v2.loader.load_font_from_qspi()` remains an optional asset loader.
+`hardware.font_v2.loader.load_font_from_file()` is the optional asset loader.
+It opens `RED2-Regular-v2.bin` through `hardware.mini_filesystem`, rather than
+reading a fixed flash address. Use `make_font_loader('my-font.bin')` to create
+a loader for another compile-time UTF-8 filename. The index entry must have
+type `font` and length 4,256 bytes. Files may live in either permitted blob
+region, including the preserved legacy font sector once it has been indexed.
+The earlier `load_font_from_qspi()` entry point aliases this filename-backed loader.
 It returns validated active configuration and BRAM writes, accepts the caller's
 blank-start/deadline pulses, and keeps the previous header active until a
 successful copy. The active-header snapshot still costs 411 flip-flops; the
 previously noted opportunity to remove that snapshot remains unimplemented.
+
+The path is font loader → file reader → live-flash proxy → QSPI pins. The font
+loader still receives the proxy's `reload_request` and `clear_error` wires
+directly. Every reload reopens the configured filename; both validation and
+copy then use that immutable handle. Index lookup occurs before preflight,
+outside vertical blanking. Missing names, wrong types/sizes, bad MFS1 headers,
+or invalid font contents fail before copy and preserve any active font. The
+file subsystem does not yet deliver file-specific change notifications.
 
 The live-flash service is independent of fonts. Its `proxy()` accepts application
 flash signals and explicit MISO, then returns the selected QSPI bus plus control
@@ -113,8 +127,8 @@ the JTAG HDL tests also pass. The host suite passes 191 tests with 75 optional
 Pypeline/GHDL tests skipped; the native hardware tests were run separately.
 
 The final synthesized netlist routes at **156.94 MHz** for the 148.5 MHz target
-with the corrected timing database and **placement seed 1**. The build wrapper
-now defaults to seed 1. Packed resources are **3,433 LUT sites**, **2,471 FFs**,
+with the corrected timing database and **placement seed 1**. That build used
+seed 1. Packed resources are **3,433 LUT sites**, **2,471 FFs**,
 one RAMB36 for the font and three RAMB18s for text. The previous extracted
 live-flash demo used 3,453 LUT sites and the same FF/BRAM counts. No additional
 pipeline stage was introduced by selecting this placement.
@@ -129,3 +143,47 @@ returned the existing 4,256-byte font with a valid header/checksum and SHA-256
 Reloading that stored font advanced generation 1 → 2 and returned READY with
 BUSY/GRANTED/ERROR clear. This check did not write flash. The previous
 hardware-tested `build/font-v2-live.bit` remains preserved.
+
+## Filename-loader validation (2026-10-29)
+
+`./test.sh` passes all **226 tests**, including the native Pypeline and GHDL
+checks, with no skips.
+
+Native file-reader tests cover committed journal records, erased holes, torn
+writes, record CRCs, deletion/supersession, bounds, UTF-8 names, retained handles,
+all 32 name bytes and padding, reopening after relocation, missing files, and
+initialization failure. An
+end-to-end loader test boots the indexed legacy font, rejects a corrupt
+replacement without BRAM writes, then reloads the same filename from a new
+address and checks all 1,024 writes. A physical SPI edge model verifies lookup
+and payload reads through the registered QSPI output bus, including two clocks
+of flash output settling time. Startup edge tests verify that quad enable
+preserves the status/configuration bits and skips register writes when quad
+mode is already enabled.
+
+The unchanged rendering fixture matches every 1920×1080 pixel across eight HDL
+frames (old, then seven new-font frames). That fixture bypasses filename lookup
+and SPI; the native integration and wire tests exercise those paths separately.
+
+The isolated file-reader probe targets **170.01 MHz**, approximately 14.5% above
+the integrated design's 148.5 MHz clock. It excludes the existing flash
+initializer and STARTUPE2 priming; the production loader includes both.
+Its final route passes at **220.46 MHz** with the corrected timing database and
+placement seed **3**, using **516 LUT sites**, **394 FFs**, and no BRAM or DSP.
+The report is `build/font-v2-filesystem-reader-timing.log` (reproduce with
+`PIPELINEC_OPEN_TOOLS_SEED=3`).
+
+The complete 1080p design, including filename lookup, flash initialization and
+the resident live-flash proxy, passes its final pin-constrained route at
+**149.84 MHz** for the **148.5 MHz** target with placement seed **2**. The corrected
+timing build wrapper now defaults to seed 2. Packed resources are **3,904 LUT
+sites**, **2,939 FFs**, one font RAMB36 and three text RAMB18s, with no DSPs.
+The bitstream and timing report are `build/font-v2-filesystem.bit` and
+`build/font-v2-filesystem-timing.log`; the validation manifest is
+`build/font-v2-filesystem-validation.json`. This build was loaded into Basys 3
+volatile SRAM on 2026-10-29. Live status returned `0x00010001`: READY, generation
+1, with BUSY, GRANTED and ERROR clear, confirming successful filename-based font
+startup. Flash was not written during that startup check. The user subsequently
+confirmed successful live font uploads and restored upload speed after the
+host-side latency and scan fixes. Those fixes pass 28 targeted host tests; the
+previously hardware-tested bitstreams remain preserved.

@@ -36,6 +36,9 @@ class Mailbox:
             # Basys 3's Digilent cable also needs its JTAG buffer enable GPIOs.
             # Match openFPGALoader's digilent cable profile (low E8/EB, high 00/60).
             controller = self.engine._ctrl
+            # Small JTAG reads otherwise wait for FTDI's default 16 ms USB
+            # latency timer. Index scans perform hundreds of these transfers.
+            controller._ftdi.set_latency_timer(1)
             controller.direction = 0xeb
             controller._ftdi.write_data(bytes((Ftdi.SET_BITS_LOW, 0xe8, 0xeb,
                                                Ftdi.SET_BITS_HIGH, 0x00, 0x60)))

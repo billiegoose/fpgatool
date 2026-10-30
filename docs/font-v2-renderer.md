@@ -94,11 +94,17 @@ Fallback glyphs paint and participate in width/kerning history like supported
 glyphs. Newline, editing controls, and the existing ignored control tokens keep
 their special behavior.
 
-The hardware demo boots its font from QSPI flash offset **`0x220000`**, the
-Basys 3 `program-data` default. Header/page-directory fields live in registers;
-all 1,024 payload words live in one true-dual-port BRAM. Port A writes during
-loading; both read ports are disabled during replacement. Write commands cross
-a register boundary before the BRAM actor and settle before ready is asserted.
+The hardware demo opens **`RED2-Regular-v2.bin`** in the MFS1 filesystem.
+`hardware.mini_filesystem` resolves its journal entry and streams its bytes;
+the font subsystem no longer chooses a physical flash address. The entry must
+have type `font` and contain exactly 4,256 bytes. An existing raw font at
+`0x220000` works after it is indexed under this name; see the
+[legacy import procedure](mini-filesystem.md#register-existing-flash-objects).
+There is no fallback to unindexed raw bytes.
+
+Header/page-directory fields live in registers; all 1,024 payload words live
+in one true-dual-port BRAM. Both read ports are disabled during replacement.
+Write commands cross a register boundary before BRAM and settle before ready.
 VGA timing and UART reception continue throughout.
 
 ```sh
@@ -108,50 +114,38 @@ python3 generate_font.py --export v2
 # In fpgatool: install the optional host dependency once.
 uv pip install --python .venv/bin/python pyftdi==0.57.1
 
-# Build and load/program the updated demo once (see build commands above).
-# Then update the font without reconfiguring or resetting the FPGA:
-./fpgatool.sh program-data ../red2-font/dist/RED2-Regular-v2.bin --live --reload
+# Build and load the updated demo once (see build commands above).
+# Then append a new immutable font blob and update its filename:
+./fpgatool.sh program-file ../red2-font/dist/RED2-Regular-v2.bin --name RED2-Regular-v2.bin --type font
 ```
 
-`--live` is format-independent: it checks the board's user-data range and
-verifies the written bytes. The exporter produces the font layout; the FPGA
-preflight parser checks header fields, checksum, counts and table/map bounds.
-For host-side font validation, including unique Unicode page prefixes and glyph
-row bounds, run `generate_font.py validate-v2 FONT.bin` in red2-font. Its shared
-compiler validates exported headers as part of generation. The general CLI
-does not parse font images.
-It checks the resident USER2 mailbox signature and requests exclusive
-flash ownership. One PyFtdi connection owns the adapter throughout programming;
-openFPGALoader uses a loopback-only XVC relay with
-`--skip-load-bridge --skip-reset --verify`. The relay preserves Digilent cable
-GPIO levels and substitutes BYPASS for cleanup JSHUTDOWN/JPROGRAM instructions.
-This covers openFPGALoader 1.1.1's unconditional reset after `program_spi()`;
-its `--skip-reset` flag alone does not prevent that reset. Other configuration
-instructions are refused. The resident USER1
-SPI bridge implements openFPGALoader's v1 protocol. During erase/program/verify,
-rendering continues from the old BRAM. With `--reload`, USER2 RELOAD releases the
-flash, rechecks quad-enable, and starts a preflight read. Only a fully validated
-image can request the in-place copy at the start of vertical blanking. The copy
-revalidates the image, then publishes its header registers and ready state.
-The next frame resets text pointers, placement, and kerning through the normal
-frame preparation path. There is no font-buffer bank or frame of black output
-on successful replacement. The loader reserves the last blank line for renderer
-preparation; a missed deadline disables scanout instead of using partial data.
+The host verifies the blob and commits its filename record through resident
+USER1 SPI-over-JTAG, then sends USER2 RELOAD. The font loader remains wired to
+that proxy reload pulse and clear-error signal. It rechecks quad enable,
+resolves the filename again, and validates the selected file before touching
+BRAM. The handle remains fixed through both preflight and copy. Index lookup
+is outside vertical blanking; only the same continuous quad-output blob read
+runs during the blanking copy. A reload caused by another file still reloads
+this configured font; file-specific notifications are not part of this change.
+Use `hardware.font_v2.loader.make_font_loader('other-font.bin')` for another
+compile-time filename.
 
-LD14 means active font ready; LD15 means invalid image, flash error, or a missed
-copy deadline. A failed preflight keeps the old font active. A failed in-place
-copy leaves the display black until another successful upload. Host programming
-failure sends RELEASE and never reloads; an interrupted host may leave flash
-ownership granted, requiring recovery/reconfiguration before another upload.
-`--ftdi-serial SERIAL` selects the adapter owned by that single USB connection.
-Plain `program-data` retains the original disruptive programming behavior for
-all other designs/assets. `--live` accepts arbitrary binary data at any allowed
-user-data address and refuses an absent/incompatible mailbox. Without `--reload`,
-it releases ownership without changing active BRAM data or generation. For the
-font demo, write a 4,256-byte font image at `0x220000` and add `--reload`.
-The design's hook owns that fixed address; the host does not infer it from the
-uploaded file. See [the general protocol](live-flash.md) for other designs.
-No board programming is performed by the build.
+Only a validated image can request an in-place copy at the start of vertical
+blanking. The copy revalidates the image, then publishes its header registers
+and ready state. The next frame resets text pointers, placement and kerning
+through normal frame preparation. No second font BRAM is needed. The loader
+reserves the last blank line for renderer preparation; a missed deadline
+keeps scanout disabled instead of using partial data.
+
+LD14 means active font ready; LD15 means missing/invalid file, flash error,
+invalid font contents, or a missed copy deadline. A failed lookup or preflight
+keeps an old font active. A failed in-place copy leaves the display black until
+another successful reload. Host programming failure sends RELEASE and never
+reloads. `--ftdi-serial SERIAL` selects the adapter. Raw `program-data` remains
+available for other consumers, but does not update the font's filename entry.
+For host-side font validation, run `generate_font.py validate-v2 FONT.bin` in
+red2-font. The general CLI does not parse font images. No board programming is
+performed by the build.
 
 The standalone exporter uses the same prepared glyphs and validated kerning as
 its web and legacy BRAM exports. The profile supports 256 global glyph IDs
@@ -336,7 +330,9 @@ order, FIFO batching, filtering reset instructions to BYPASS, and TAP resync.
 
 The capture fixture can replace the font spacing with 9 at the sixth vertical
 blank, using the same parser, registered BRAM writes, read-port gating, and
-renderer. It emits words at the 14.85 MHz burst cadence while bypassing SPI pads.
+renderer. It emits words at the 14.85 MHz burst cadence while bypassing filename
+lookup and SPI pads. Native file-reader integration tests exercise the real
+filename lookup, font preflight, relocation and retry path.
 Compare every captured frame using red2-font's independent binary decoder and
 full-history pixel renderer. The font file must match the original simulation
 fixture; generate it with `v2-reference` as shown above, rather than using a

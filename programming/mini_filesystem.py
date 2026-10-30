@@ -227,9 +227,19 @@ class MiniFileSystem:
         self.flash.program(self.start, HEADER_MAGIC)
 
     def read_index(self) -> tuple[list[Entry], int | None]:
+        entries, next_slot, _ = self._scan_index()
+        return entries, next_slot
+
+    def _scan_index(self) -> tuple[list[Entry], int | None, bool]:
+        """Return entries, append slot and blank-index state from one snapshot.
+
+        Read the whole journal: an erased hole does not rule out later records.
+        Keep the blank-index result local to this scan; a future operation must
+        inspect flash again rather than trust a cached allocation/header state.
+        """
         raw = self.flash.read(self.start, self.sector_size)
         if raw == b'\xff' * self.sector_size:
-            return [], 0  # New, completely erased partition index.
+            return [], 0, True  # New, completely erased partition index.
         if raw[:len(HEADER_MAGIC)] != HEADER_MAGIC:
             raise FPGAToolError('unrecognized data at filesystem index; --format-filesystem resets only the index sector')
         if raw[len(HEADER_MAGIC):INDEX_HEADER_BYTES] != b'\xff' * (INDEX_HEADER_BYTES - len(HEADER_MAGIC)):
@@ -249,7 +259,7 @@ class MiniFileSystem:
                              parsed.address + parsed.length <= self.start)):
                         raise FPGAToolError(f'index record {slot} points outside data partition')
                     entries.append(parsed)
-        return entries, next_slot if next_slot < self.index_entries else None
+        return entries, next_slot if next_slot < self.index_entries else None, False
 
     def _empty_slot(self, slot: int) -> int:
         return self.start + INDEX_HEADER_BYTES + slot * ENTRY_BYTES
@@ -295,7 +305,7 @@ class MiniFileSystem:
         if expected_digest is not None and len(expected_digest) != 16:
             raise ValueError('expected BLAKE2s-128 digest must be 16 bytes')
 
-        entries, free_slot = self.read_index()
+        entries, free_slot, blank_index = self._scan_index()
         digest = content_id(self.flash.read(address, length))
         if expected_digest is not None and digest != expected_digest:
             raise FPGAToolError(
@@ -315,7 +325,7 @@ class MiniFileSystem:
             raise FPGAToolError('filesystem index full; compaction not implemented')
 
         record_address = self._empty_slot(free_slot)
-        if self.flash.read(self.start, self.sector_size) == b'\xff' * self.sector_size:
+        if blank_index:
             self.flash.program(self.start, HEADER_MAGIC)
         record = encode_entry(object_type, digest, address, length, encoded_name)
         self.flash.program(record_address, record[:63])
@@ -332,7 +342,7 @@ class MiniFileSystem:
         if len(data) > self.end - self.data_start:
             raise FPGAToolError('file exceeds filesystem data capacity')
         digest = content_id(data)
-        entries, free_slot = self.read_index()
+        entries, free_slot, blank_index = self._scan_index()
         latest = {}
         for entry in entries:
             if entry.name:
@@ -356,7 +366,7 @@ class MiniFileSystem:
             address = self.data_start
         record_address = self._empty_slot(free_slot)
         # Initialize only an entirely blank index; never overwrite foreign data.
-        if self.flash.read(self.start, self.sector_size) == b'\xff' * self.sector_size:
+        if blank_index:
             self.flash.program(self.start, HEADER_MAGIC)
         record = encode_entry(object_type, digest, address, len(data), encoded_name)
         self.flash.program(record_address, record[:63])

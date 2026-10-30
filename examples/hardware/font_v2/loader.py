@@ -1,12 +1,12 @@
 # pyright: reportInvalidTypeForm=none
-"""Boot a font from the default program-data address, in the pixel clock domain."""
+"""Load a named MFS1 font, retaining proxy-triggered vertical-blank reloads."""
 from pypeline import *
-from hardware import QSPI
-from hardware.qspi_burst import read_burst
+from hardware.QSPI import qspi_flash_byte_io_t
+from hardware.mini_filesystem import make_file_reader, TYPE_FONT
 from hardware.font_v2.format import (MAGIC, VERSION, HEADER_BYTES, HEADER_WORDS,
                                     PAYLOAD_WORDS, PAGE_WORD_BASE, MAX_PAGES)
 
-FONT_FLASH_OFFSET = 0x220000
+DEFAULT_FONT_FILENAME = 'RED2-Regular-v2.bin'
 
 
 from hardware.font_v2.types import font_v2_config_t
@@ -163,106 +163,129 @@ def consume_font_word(word: uint32_t, valid: uint1_t, io_error: uint1_t,
 @struct
 class font_v2_boot_t(NamedTuple):
     font: font_v2_load_t
-    flash: QSPI.qspi_flash_byte_io_t
+    flash: qspi_flash_byte_io_t
     busy: uint1_t
     done: uint1_t
 
 
-@hw_func
-def load_font_from_qspi(dq: uint4_t, blank_start: uint1_t = 0,
-                        blank_deadline: uint1_t = 0,
-                        reload: uint1_t = 0,
-                        clear_error: uint1_t = 0) -> font_v2_boot_t:
-    """Load at boot or on a reload pulse; done marks successful publication.
+def make_font_loader(filename: str):
+    """Create a font loader that opens this filename at boot and each reload.
 
-    Flash ownership and physical pin routing belong to the caller. This loader
-    starts no flash transfers while idle, so its idle state is quiescent.
+    The resolved immutable file is reused for preflight and vblank copy. Only
+    the proxy's reload pulse requests a new lookup; rendering uses active BRAM.
     """
-    # INIT, QE wait, preflight start/read, wait-vblank, copy start/read,
-    # publish, idle. Preflight changes neither BRAM nor active config.
-    phase: Reg[uint4_t] = 0
-    active_config: Reg[font_v2_config_t]
-    active_ready: Reg[uint1_t] = 0
-    update_error: Reg[uint1_t] = 0
-    runtime_copy: Reg[uint1_t] = 0
-    assembled: Reg[uint32_t] = 0
-    byte_index: Reg[uint2_t] = 0
-    word: Reg[uint32_t] = 0
-    word_valid: Reg[uint1_t] = 0
-    cycle_phase: uint4_t = phase
-    saved_config: font_v2_config_t = active_config
-    saved_ready: uint1_t = active_ready
-    saved_error: uint1_t = update_error
-    parser_reset: uint1_t = (cycle_phase == 2) | (cycle_phase == 5)
-    parsed = consume_font_word(word, word_valid, uint1_t(0), parser_reset)
-    word_valid = 0
-    initialization = QSPI.flash_byte_io(dq, uint2_t(0), uint32_t(0), uint8_t(0),
-                                       uint1_t(cycle_phase == 0))
-    timed_out: uint1_t = (cycle_phase == 6) & runtime_copy & blank_deadline
-    burst = read_burst(dq, parser_reset, uint24_t(FONT_FLASH_OFFSET),
-                       uint13_t(HEADER_BYTES + 4096), parsed.error | timed_out)
-    if burst.valid:
-        assembled = assembled | (uint32_t(burst.pins.read_data) << (uint5_t(byte_index) << 3))
-        if byte_index == 3:
-            word = assembled
-            word_valid = 1
-            assembled = 0
-        byte_index = byte_index + 1
-    if parser_reset:
-        assembled = 0
-        byte_index = 0
+    read_file = make_file_reader(filename)
+
+    @hw_func
+    def load_font_from_file(dq: uint4_t, blank_start: uint1_t = 0,
+                            blank_deadline: uint1_t = 0,
+                            reload: uint1_t = 0,
+                            clear_error: uint1_t = 0) -> font_v2_boot_t:
+        """Load at boot or on a reload pulse; done marks successful publication.
+
+        Flash ownership and physical pin routing belong to the caller. This loader
+        starts no flash transfers while idle, so its idle state is quiescent.
+        """
+        # Open filename, open wait, preflight start/read, wait-vblank, copy start/read,
+        # publish, idle. Preflight changes neither BRAM nor active config.
+        phase: Reg[uint4_t] = 0
+        active_config: Reg[font_v2_config_t]
+        active_ready: Reg[uint1_t] = 0
+        update_error: Reg[uint1_t] = 0
+        runtime_copy: Reg[uint1_t] = 0
+        assembled: Reg[uint32_t] = 0
+        byte_index: Reg[uint2_t] = 0
+        word: Reg[uint32_t] = 0
+        word_valid: Reg[uint1_t] = 0
+        # Isolate file-side word assembly from the header validator's placement.
+        # Data and validity cross this boundary together, one clock later.
+        parse_word: Reg[uint32_t] = 0
+        parse_valid: Reg[uint1_t] = 0
+        cycle_phase: uint4_t = phase
+        saved_config: font_v2_config_t = active_config
+        saved_ready: uint1_t = active_ready
+        saved_error: uint1_t = update_error
+        parser_reset: uint1_t = (cycle_phase == 2) | (cycle_phase == 5)
+        parsed = consume_font_word(parse_word, parse_valid, uint1_t(0), parser_reset)
+        parse_word = word
+        parse_valid = word_valid
         word_valid = 0
-    if cycle_phase == 0:
-        phase = 1
-    elif cycle_phase == 1:
-        if initialization.ready:
-            if initialization.quad_enabled:
-                phase = 2
-            else:
+        timed_out: uint1_t = (cycle_phase == 6) & runtime_copy & blank_deadline
+        reading: uint1_t = (cycle_phase == 3) | (cycle_phase == 6)
+        file = read_file(dq, uint1_t(cycle_phase == 0), parser_reset,
+                         uint24_t(0), uint13_t(HEADER_BYTES + 4096),
+                         (reading & parsed.error) | timed_out)
+        if file.valid:
+            assembled = assembled | (uint32_t(file.data) << (uint5_t(byte_index) << 3))
+            if byte_index == 3:
+                word = assembled
+                word_valid = 1
+                assembled = 0
+            byte_index = byte_index + 1
+        if parser_reset:
+            assembled = 0
+            byte_index = 0
+            word_valid = 0
+            parse_valid = 0
+        if cycle_phase == 0:
+            phase = 1
+        elif cycle_phase == 1:
+            if not file.busy:
+                if file.error:
+                    update_error = 1
+                    phase = 8
+                elif file.opened:
+                    if (file.object_type == TYPE_FONT) & (file.length == HEADER_BYTES + 4096):
+                        phase = 2
+                    else:
+                        update_error = 1
+                        phase = 8
+        elif cycle_phase == 2:
+            phase = 3
+        elif cycle_phase == 3:
+            if parsed.error | file.error:
                 update_error = 1
                 phase = 8
-    elif cycle_phase == 2:
-        phase = 3
-    elif cycle_phase == 3:
-        if parsed.error:
-            update_error = 1
+            elif parsed.ready & (~file.busy):
+                phase = 4
+        elif cycle_phase == 4:
+            # Bootstrap has no visible old font to preserve. Live replacement must
+            # begin at the first blank line, never partway through the interval.
+            if (~active_ready) | blank_start:
+                runtime_copy = active_ready
+                active_ready = 0
+                phase = 5
+        elif cycle_phase == 5:
+            phase = 6
+        elif cycle_phase == 6:
+            if parsed.error | file.error | timed_out:
+                # A failed in-place copy cannot restore the previous BRAM. Keep
+                # the display disabled until a subsequent successful upload.
+                active_ready = 0
+                update_error = 1
+                phase = 8
+            elif parsed.ready & (~file.busy):
+                phase = 7
+        elif cycle_phase == 7:
+            active_config = parsed.config
+            active_ready = 1
+            update_error = 0
             phase = 8
-        elif parsed.ready & burst.pins.ready:
-            phase = 4
-    elif cycle_phase == 4:
-        # Bootstrap has no visible old font to preserve. Live replacement must
-        # begin at the first blank line, never partway through the interval.
-        if (~active_ready) | blank_start:
-            runtime_copy = active_ready
-            active_ready = 0
-            phase = 5
-    elif cycle_phase == 5:
-        phase = 6
-    elif cycle_phase == 6:
-        if parsed.error | timed_out:
-            # A failed in-place copy cannot restore the previous BRAM. Keep
-            # the display disabled until a subsequent successful upload.
-            active_ready = 0
-            update_error = 1
-            phase = 8
-        elif parsed.ready & burst.pins.ready:
-            phase = 7
-    elif cycle_phase == 7:
-        active_config = parsed.config
-        active_ready = 1
-        update_error = 0
-        phase = 8
-    elif cycle_phase == 8:
-        if reload:
-            phase = 0
-    if clear_error:
-        update_error = 0
-    flash = burst.pins
-    if cycle_phase <= 1:
-        flash = initialization
-    write_enable: uint1_t = (cycle_phase == 6) & parsed.write_enable & (~timed_out)
-    font = font_v2_load_t(config=saved_config, ready=saved_ready, error=saved_error,
-        write_enable=write_enable, write_address=parsed.write_address,
-        write_data=parsed.write_data)
-    return font_v2_boot_t(font=font, flash=flash,
-                          busy=uint1_t(cycle_phase != 8), done=uint1_t(cycle_phase == 7))
+        elif cycle_phase == 8:
+            if reload:
+                phase = 0
+        if clear_error:
+            update_error = 0
+        write_enable: uint1_t = (cycle_phase == 6) & parsed.write_enable & (~timed_out) & (~file.error)
+        font = font_v2_load_t(config=saved_config, ready=saved_ready, error=saved_error,
+            write_enable=write_enable, write_address=parsed.write_address,
+            write_data=parsed.write_data)
+        return font_v2_boot_t(font=font, flash=file.flash,
+                              busy=uint1_t(cycle_phase != 8), done=uint1_t(cycle_phase == 7))
+
+    return load_font_from_file
+
+
+load_font_from_file = make_font_loader(DEFAULT_FONT_FILENAME)
+# Existing callers use the same interface, now backed by filename lookup.
+load_font_from_qspi = load_font_from_file

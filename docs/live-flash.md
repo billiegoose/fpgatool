@@ -19,9 +19,11 @@ fpgatool program-data assets.bin --live --reload --reload-timeout 10
 The application owns its storage layout and reload operation. The current
 mailbox carries no address, length or asset selector. A design may reload one
 configured region, inspect an application manifest, or refresh several resources.
-The caller must write the region expected by that design. The font demo's hook
-loads the font at `0x220000`; its update command now needs **both `--live` and
-`--reload`**. File content does not automatically select a reload handler.
+The caller must update the storage expected by that design. The font demo's hook
+opens `RED2-Regular-v2.bin` from the mini-filesystem; use
+`program-file FONT.bin --name RED2-Regular-v2.bin --type font` for its uploads.
+That command requests RELOAD after a changed, verified upload. File content does
+not automatically select a reload handler; the font still uses the proxy's pulse.
 
 ## Ownership and activation contract
 
@@ -115,6 +117,11 @@ already quiescent. It takes `reload_request` and `clear_error` directly and
 reports its loading status, leaving all host commands outside the loader.
 Its font-specific bounds checks, single-BRAM writes, and vblank scheduling stay
 in `hardware/font_v2/loader.py`.
+The font loader now opens its configured filename through
+`hardware/mini_filesystem.py`; that file reader owns QSPI initialization, journal
+lookup and bounded blob reads below the font loader and above the proxy. The
+proxy's `reload_request` remains connected directly to the font loader. A reload
+resolves the name anew before validation; it is not yet a file-specific notification.
 
 For another board, reuse `hardware/live_flash.py`, the application-independent
 ownership/reload controller. Supply the board's mailbox and SPI bridge around it,

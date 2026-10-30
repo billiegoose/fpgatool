@@ -165,6 +165,44 @@ class MiniFilesystemTests(unittest.TestCase):
         self.assertEqual(self.flash.read(dead_slot, 12), b'\x01' * 12)
         self.assertEqual([e.slot for e in self.fs.read_index()[0]], [0, 2])
 
+    def test_erased_gap_does_not_hide_later_records_or_reuse_earlier_slots(self):
+        self.fs.add(b'FIRST', 'first.txt', 1)
+        late_address = START + SECTOR + PAGE_BYTES
+        self.flash.program(late_address, b'LATE')
+        late = encode_entry(1, content_id(b'LATE'), late_address, 4, b'late.txt')
+        self.flash.program(START + INDEX_HEADER_BYTES + 8 * ENTRY_BYTES, late)
+        entries, free_slot = self.fs.read_index()
+        self.assertEqual([(entry.slot, entry.name) for entry in entries],
+                         [(0, b'first.txt'), (8, b'late.txt')])
+        self.assertEqual(free_slot, 9)
+        created, _ = self.fs.add(b'NEXT', 'next.txt', 1)
+        self.assertEqual(created.slot, 9)
+        self.assertEqual(self.flash.read(START + INDEX_HEADER_BYTES + ENTRY_BYTES,
+                                        7 * ENTRY_BYTES), b'\xff' * (7 * ENTRY_BYTES))
+
+    def test_upload_scans_index_once_and_rechecks_it_on_each_operation(self):
+        with patch.object(self.flash, 'read', wraps=self.flash.read) as read:
+            for data in (b'first', b'replacement'):
+                read.reset_mock()
+                _, changed = self.fs.add(data, 'file.txt', 1)
+                self.assertTrue(changed)
+                self.assertEqual(sum(call.args == (START, SECTOR)
+                                     for call in read.call_args_list), 1)
+        self.assertEqual(self.flash.read(START, len(HEADER_MAGIC)), HEADER_MAGIC)
+
+    def test_legacy_registration_scans_index_once_per_operation(self):
+        fs = MiniFileSystem(self.flash, start=START + SECTOR, end=END,
+                            sector_size=SECTOR, legacy_start=START)
+        self.flash.program(START, b'LEGACY')
+        with patch.object(self.flash, 'read', wraps=self.flash.read) as read:
+            for name in ('first.bin', 'alias.bin'):
+                read.reset_mock()
+                _, changed = fs.register_existing(START, 6, name, 2)
+                self.assertTrue(changed)
+                self.assertEqual(sum(call.args == (START + SECTOR, SECTOR)
+                                     for call in read.call_args_list), 1)
+        self.assertEqual(self.flash.read(START, 6), b'LEGACY')
+
     def test_orphan_blob_pages_are_skipped_after_interruption(self):
         self.fs.add(b'a', 'a.txt', 1)
         # Flash page partially written, but no committed index entry.

@@ -13,8 +13,7 @@ try:
 except ImportError:
     p = None
 else:
-    from hardware.font_v2.loader import (consume_font_word, load_font_from_qspi,
-                                        FONT_FLASH_OFFSET)
+    from hardware.font_v2.loader import consume_font_word
     from hardware.font_v2.types import font_v2_config_t
     from hardware import QSPI
     from hardware.font_v2.mapping import lookup_unicode_page
