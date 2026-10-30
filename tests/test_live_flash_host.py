@@ -13,6 +13,29 @@ from examples.hardware.live_flash_protocol import BEGIN, RELOAD, RELEASE, READY,
 
 
 class GeneralLiveTests(unittest.TestCase):
+    def test_mailbox_reenumerates_usb_after_device_reconnects(self):
+        device = {'current': 1, 'cached': 0}
+        engine = Mock()
+
+        def enumerate_again():
+            device['cached'] = device['current']
+
+        def configure(url):
+            if device['cached'] != device['current']:
+                raise OSError(19, 'No such device (it may have been disconnected)')
+
+        engine.configure.side_effect = configure
+        with patch('pyftdi.jtag.JtagEngine', return_value=engine), \
+             patch('pyftdi.usbtools.UsbTools.flush_cache', side_effect=enumerate_again), \
+             patch.object(Mailbox, 'read', return_value=READY):
+            with Mailbox('adapter'):
+                pass
+            device['current'] += 1  # Another process reconnected the adapter.
+            with Mailbox('adapter'):
+                pass
+        self.assertEqual(engine.configure.call_count, 2)
+        self.assertEqual(engine.close.call_count, 2)
+
     def test_mailbox_cleanup_does_not_repeat_idle_and_always_closes_usb(self):
         mailbox = Mailbox()
         mailbox.engine = Mock()

@@ -23,6 +23,7 @@ class Mailbox:
             from pyftdi.jtag import JtagEngine
             from pyftdi.bits import BitSequence
             from pyftdi.ftdi import Ftdi
+            from pyftdi.usbtools import UsbTools
         except ImportError as exc:
             raise FPGAToolError('live uploads require PyFtdi: '
                 'uv pip install --python .venv/bin/python pyftdi==0.57.1') from exc
@@ -32,6 +33,11 @@ class Mailbox:
         if self.serial:
             url = f'ftdi://0x0403:0x6010:{self.serial}/1'
         try:
+            # A programmer or cable reconnect can change the USB device's
+            # address while a local server stays alive. Discard enumeration
+            # descriptors before each new connection; this does not reset USB
+            # or close any active interfaces.
+            UsbTools.flush_cache()
             self.engine.configure(url)
             # Basys 3's Digilent cable also needs its JTAG buffer enable GPIOs.
             # Match openFPGALoader's digilent cable profile (low E8/EB, high 00/60).
